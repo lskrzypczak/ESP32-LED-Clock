@@ -9,8 +9,8 @@
 #include "WebServerHandlers.h"
 
 // Default WiFi configuration
-const char* DEFAULT_WIFI_SSID = "Szkodniki";        // Replace with your WiFi SSID
-const char* DEFAULT_WIFI_PASSWORD = "AlaMaKotaAKotMaPrzechlapane"; // Replace with your WiFi password
+const char* DEFAULT_WIFI_SSID = "SSID";        // Replace with your WiFi SSID
+const char* DEFAULT_WIFI_PASSWORD = "PASSWORD"; // Replace with your WiFi password
 
 // Stored/persistent WiFi configuration (loaded from NVS)
 String wifiSsid;
