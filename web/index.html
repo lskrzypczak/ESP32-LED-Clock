@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 LED Clock</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem; }
+    h1 { margin-bottom: 0.5rem; }
+    .card { padding: 1rem; border: 1px solid #ccc; border-radius: 10px; margin-bottom: 1rem; }
+    label { display: block; margin: 0.4rem 0; }
+    input, select { padding: 0.3rem; margin-left: 0.4rem; }
+    button { padding: 0.4rem 0.7rem; margin-top: 0.5rem; }
+  </style>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+</head>
+<body>
+<div id="app">
+  <h1>ESP32 LED Clock</h1>
+
+  <div class="card">
+    <h2>Status</h2>
+    <div v-if="loading">Loading…</div>
+    <div v-else>
+      <p><strong>Time:</strong> {{ status.time }}</p>
+      <p><strong>Timezone:</strong> {{ status.timezone.name }} ({{ status.timezone.description }})</p>
+      <p><strong>DST:</strong> {{ status.dstMode }}</p>
+      <p v-if="status.dstMode === 'manual'"><strong>DST Offset:</strong> {{ status.manualDstOffsetHours }} h</p>
+      <p><strong>WiFi mode:</strong> {{ status.wifiMode }}</p>
+      <p v-if="status.wifiMode === 'AP'"><strong>AP SSID:</strong> {{ status.apSsid }}</p>
+      <p v-if="status.wifiMode === 'station'"><strong>SSID:</strong> {{ status.wifiSsid }}</p>
+      <p v-if="status.ip"><strong>IP:</strong> {{ status.ip }}</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Set Time</h2>
+    <label>Hour: <input type="number" v-model.number="time.hour" min="0" max="23"></label>
+    <label>Minute: <input type="number" v-model.number="time.minute" min="0" max="59"></label>
+    <label>Second: <input type="number" v-model.number="time.second" min="0" max="59"></label>
+    <button @click="submitTime">Set Time</button>
+  </div>
+
+  <div class="card">
+    <h2>Timezone</h2>
+    <label>Timezone:
+      <select v-model.number="timezoneIndex">
+        <option v-for="tz in timezones" :value="tz.index">{{ tz.name }} — {{ tz.description }}</option>
+      </select>
+    </label>
+
+    <div>
+      <label><input type="radio" value="auto" v-model="dstMode"> Automatic</label>
+      <label><input type="radio" value="manual" v-model="dstMode"> Manual</label>
+    </div>
+
+    <div v-if="dstMode === 'manual'">
+      <label>DST offset:
+        <select v-model.number="manualDstOffset">
+          <option :value="0">0</option>
+          <option :value="3600">+1 hour</option>
+          <option :value="7200">+2 hours</option>
+        </select>
+      </label>
+    </div>
+
+    <button @click="submitTimezone">Update Timezone</button>
+  </div>
+
+  <div class="card">
+    <h2>Alarms</h2>
+    <div v-if="alarms.length === 0">
+      <p>No alarms configured.</p>
+    </div>
+    <div v-for="(alarm, idx) in alarms" :key="idx" style="margin-bottom: 1rem; padding: 0.5rem; border: 1px solid #ddd; border-radius: 8px;">
+      <label><input type="checkbox" v-model="alarm.enabled"> Enabled</label>
+      <label>Hour: <input type="number" v-model.number="alarm.hour" min="0" max="23"></label>
+      <label>Minute: <input type="number" v-model.number="alarm.minute" min="0" max="59"></label>
+      <label>Sound:
+        <select v-model.number="alarm.sound">
+          <option :value="0">Siren</option>
+          <option :value="1">Beep</option>
+          <option :value="2">Melody</option>
+        </select>
+      </label>
+      <button @click="removeAlarm(idx)">Remove</button>
+    </div>
+
+    <button @click="addAlarm" style="margin-right:0.5rem;">Add Alarm</button>
+    <button @click="submitAlarms">Save Alarms</button>
+  </div>
+
+  <div class="card" v-if="status.wifiMode === 'AP'">
+    <h2>WiFi (AP mode)</h2>
+    <label>SSID: <input v-model="wifi.ssid"></label>
+    <label>Password: <input type="password" v-model="wifi.password"></label>
+    <button @click="submitWifi">Save & Restart</button>
+  </div>
+
+  <div class="card" v-if="message">
+    <strong>{{ message }}</strong>
+  </div>
+</div>
+
+<script>
+const { createApp } = Vue;
+
+createApp({
+  data() {
+    return {
+      status: {},
+      loading: true,
+      time: { hour: 0, minute: 0, second: 0 },
+      timezones: [],
+      timezoneIndex: 0,
+      dstMode: 'auto',
+      manualDstOffset: 0,
+      wifi: { ssid: '', password: '' },
+      alarms: [],
+      message: ''
+    };
+  },
+  computed: {
+    manualDstOffsetHours() {
+      return this.manualDstOffset / 3600;
+    }
+  },
+  methods: {
+    async loadStatus() {
+      this.loading = true;
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        this.status = data;
+        this.timezones = data.timezones || [];
+        this.timezoneIndex = data.timezoneIndex;
+        this.dstMode = data.dstMode;
+        this.manualDstOffset = data.manualDstOffset;
+        this.time.hour = data.hour || 0;
+        this.time.minute = data.minute || 0;
+        this.time.second = data.second || 0;
+        this.wifi.ssid = data.wifiSsid || '';
+        this.alarms = Array.isArray(data.alarms) ? data.alarms : [];
+      } catch (e) {
+        this.message = 'Failed to load status';
+      } finally {
+        this.loading = false;
+      }
+    },
+    async submitTime() {
+      const body = new URLSearchParams();
+      body.append('hour', this.time.hour);
+      body.append('minute', this.time.minute);
+      body.append('second', this.time.second);
+      const res = await fetch('/api/settime', { method: 'POST', body });
+      const data = await res.json();
+      this.message = data.message || (data.success ? 'Time updated' : 'Failed');
+      if (data.success) this.loadStatus();
+    },
+    async submitTimezone() {
+      const body = new URLSearchParams();
+      body.append('timezone', this.timezoneIndex);
+      body.append('dstmode', this.dstMode);
+      body.append('manualdst', this.manualDstOffset);
+      const res = await fetch('/api/timezone', { method: 'POST', body });
+      const data = await res.json();
+      this.message = data.message || (data.success ? 'Timezone updated' : 'Failed');
+      if (data.success) this.loadStatus();
+    },
+    async submitWifi() {
+      const body = new URLSearchParams();
+      body.append('ssid', this.wifi.ssid);
+      body.append('password', this.wifi.password);
+      const res = await fetch('/api/wifi', { method: 'POST', body });
+      const data = await res.json();
+      this.message = data.message || (data.success ? 'Saved - restarting' : 'Failed');
+    },
+    addAlarm() {
+      if (this.alarms.length < 6) {
+        this.alarms.push({ enabled: false, hour: 0, minute: 0, sound: 0 });
+      }
+    },
+    removeAlarm(index) {
+      this.alarms.splice(index, 1);
+    },
+    async submitAlarms() {
+      const body = new URLSearchParams();
+      const encoded = this.alarms.map(a => {
+        const enabled = a.enabled ? '1' : '0';
+        return `${enabled},${a.hour},${a.minute},${a.sound}`;
+      }).join('|');
+      body.append('alarms', encoded);
+      const res = await fetch('/api/alarms', { method: 'POST', body });
+      const data = await res.json();
+      this.message = data.message || (data.success ? 'Alarms saved' : 'Failed');
+      if (data.success) this.loadStatus();
+    }
+  },
+  mounted() {
+    this.loadStatus();
+    setInterval(this.loadStatus, 5000);
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
