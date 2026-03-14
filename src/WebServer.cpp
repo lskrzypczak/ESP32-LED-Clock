@@ -1,15 +1,32 @@
+/**
+ * @file WebServer.cpp
+ * @brief HTTP handlers for the LED clock single-page web interface.
+ *
+ * The web layer shares the same compact alarm record format as the persistence
+ * layer in `main.cpp`. Titles are percent-decoded here so the browser can send
+ * them safely inside a comma- and pipe-delimited payload.
+ */
+
 #include "WebServerHandlers.h"
 #include "WebRoot.h"
 #include "AlarmMelodies.h"
 #include <Arduino.h>
 #include <WiFi.h>
 
-// Web server handler implementations
-
+/**
+ * @brief Sends a JSON response with the given HTTP status.
+ * @param code HTTP status code.
+ * @param payload Serialized JSON body.
+ */
 static void sendJson(int code, const String &payload) {
   server.send(code, "application/json", payload);
 }
 
+/**
+ * @brief Escapes a string for inclusion in JSON output.
+ * @param s Raw input string.
+ * @return JSON-safe string content without surrounding quotes.
+ */
 static String jsonEscape(const String &s) {
   String out;
   for (size_t i = 0; i < s.length(); i++) {
@@ -26,6 +43,48 @@ static String jsonEscape(const String &s) {
   return out;
 }
 
+/**
+ * @brief Converts one hexadecimal digit to its numeric value.
+ * @param c ASCII hex digit.
+ * @return Nibble value or `-1` if invalid.
+ */
+static int fromHexDigit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
+/**
+ * @brief Decodes a percent-encoded alarm title from the web payload.
+ * @param encoded Encoded title segment.
+ * @return Decoded title with surrounding whitespace trimmed.
+ */
+static String decodeAlarmTitle(const String &encoded) {
+  String decoded;
+  decoded.reserve(encoded.length());
+
+  for (size_t i = 0; i < encoded.length(); i++) {
+    char c = encoded[i];
+    if (c == '%' && i + 2 < encoded.length()) {
+      int hi = fromHexDigit(encoded[i + 1]);
+      int lo = fromHexDigit(encoded[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        decoded += static_cast<char>((hi << 4) | lo);
+        i += 2;
+        continue;
+      }
+    }
+    decoded += c;
+  }
+
+  decoded.trim();
+  return decoded;
+}
+
+/**
+ * @brief Serves the main single-page web interface.
+ */
 void handleRoot() {
   server.send_P(200, "text/html", index_html);
 }
@@ -62,6 +121,14 @@ void handleSetTimePost() {
     server.send(400, "text/html", "<html><body><h1>Error: Missing parameters</h1><p><a href='/settime'>Try again</a></p></body></html>");
   }
 }
+/**
+ * @brief Returns the current device state, including alarms, as JSON.
+ *
+ * @details
+ * Alarm objects are expanded into named JSON fields here even though they are
+ * stored compactly in NVS. This keeps the browser code straightforward while
+ * allowing the firmware to retain its compact persistence format.
+ */
 void handleApiStatus() {
   DateTime now = rtc.now();
   char timeStr[20];
@@ -100,6 +167,7 @@ void handleApiStatus() {
     json += ",\"minute\":" + String(alarms[i].minute);
     json += ",\"sound\":" + String(alarms[i].sound);
     json += ",\"schedule\":" + String(alarms[i].schedule);
+    json += ",\"title\":\"" + jsonEscape(alarms[i].title) + "\"";
     json += "}";
     if (i < alarmCount - 1) json += ",";
   }
@@ -154,9 +222,18 @@ void handleApiWifi() {
   }
 }
 
+/**
+ * @brief Saves the full alarm list received from the browser.
+ *
+ * @details
+ * The browser submits alarms in one compact form field:
+ * `enabled,hour,minute,sound,schedule,title|...`
+ *
+ * Titles are percent-encoded so commas and pipes remain reserved as field and
+ * record delimiters. The parser requires the full six-field record layout and
+ * skips invalid records rather than accepting partially corrupt data.
+ */
 void handleApiAlarms() {
-  // Expects a single form field 'alarms' with a pipe-separated list of alarms:
-  // enabled,hour,minute,sound,schedule|...
   if (!server.hasArg("alarms")) {
     sendJson(400, "{\"success\":false,\"message\":\"Missing alarms parameter\"}");
     return;
@@ -170,7 +247,7 @@ void handleApiAlarms() {
     return;
   }
 
-  // Parse and validate alarms
+  // Parse one record at a time so bad data cannot poison the whole list.
   int newCount = 0;
   int start = 0;
   while (start < encoded.length() && newCount < MAX_ALARMS) {
@@ -182,16 +259,21 @@ void handleApiAlarms() {
     int p1 = (p0 >= 0) ? chunk.indexOf(',', p0 + 1) : -1;
     int p2 = (p1 >= 0) ? chunk.indexOf(',', p1 + 1) : -1;
     int p3 = (p2 >= 0) ? chunk.indexOf(',', p2 + 1) : -1;
+    int p4 = (p3 >= 0) ? chunk.indexOf(',', p3 + 1) : -1;
 
     if (p0 >= 0 && p1 >= 0 && p2 >= 0 && p3 >= 0) {
       bool enabled = chunk.substring(0, p0) == "1";
       uint8_t hour = chunk.substring(p0 + 1, p1).toInt();
       uint8_t minute = chunk.substring(p1 + 1, p2).toInt();
       uint8_t sound = chunk.substring(p2 + 1, p3).toInt();
-      uint8_t schedule = chunk.substring(p3 + 1).toInt();
+      uint8_t schedule = (p4 >= 0) ? chunk.substring(p3 + 1, p4).toInt() : chunk.substring(p3 + 1).toInt();
+      String title = decodeAlarmTitle(chunk.substring(p4 + 1));
 
       if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT && schedule < ALARM_SCHEDULE_COUNT) {
-        alarms[newCount++] = {enabled, hour, minute, sound, schedule};
+        if (title.length() == 0) {
+          title = "Alarm " + String(newCount + 1);
+        }
+        alarms[newCount++] = {enabled, hour, minute, sound, schedule, title};
       }
     }
 

@@ -1,3 +1,13 @@
+/**
+ * @file main.cpp
+ * @brief Main firmware entry point for the ESP32 LED clock.
+ *
+ * Besides hardware initialization and task orchestration, this file owns the
+ * persistent configuration that must survive reboots. The alarm persistence
+ * helpers below are intentionally documented in detail because they define the
+ * serialized format that both the runtime scheduler and the web API depend on.
+ */
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -69,7 +79,12 @@ int getEffectiveGmtOffset() {
   }
 }
 
-// WiFi credential persistence
+/**
+ * @brief Loads WiFi credentials from the `wifi` NVS namespace.
+ *
+ * Missing keys fall back to the compile-time defaults so a first boot still
+ * has usable credentials or an AP placeholder.
+ */
 void loadWifiCredentials() {
   prefs.begin("wifi", true);
   wifiSsid = prefs.getString("ssid", DEFAULT_WIFI_SSID);
@@ -77,6 +92,11 @@ void loadWifiCredentials() {
   prefs.end();
 }
 
+/**
+ * @brief Stores WiFi credentials in the `wifi` NVS namespace.
+ * @param ssid Station SSID to persist.
+ * @param password Station password to persist.
+ */
 void saveWifiCredentials(const String &ssid, const String &password) {
   Serial.println("Saving WiFi credentials to NVS");
   Serial.print("SSID: ");
@@ -92,10 +112,135 @@ void saveWifiCredentials(const String &ssid, const String &password) {
   Serial.println("Credentials saved to NVS and globals updated");
 }
 
-// Alarm persistence
+/**
+ * @brief In-memory alarm table used by the scheduler and web UI.
+ *
+ * The array has a fixed maximum size to avoid heap allocations inside the
+ * timing-critical scheduler path. Only the first `alarmCount` entries are
+ * considered valid.
+ */
 AlarmConfig alarms[MAX_ALARMS];
+/** @brief Number of populated entries currently stored in `alarms`. */
 int alarmCount = 0;
 
+/**
+ * @brief Builds a fallback title when a persisted alarm has no usable label.
+ * @param index Zero-based alarm index in the in-memory array.
+ * @return A UI-friendly default label such as `Alarm 1`.
+ */
+static String defaultAlarmTitle(int index) {
+  return "Alarm " + String(index + 1);
+}
+
+/**
+ * @brief Reports whether a character can be written directly to the title field.
+ *
+ * Alarm records are serialized into a comma- and pipe-delimited string.
+ * Unsafe characters must therefore be escaped before persistence, otherwise
+ * they would be misinterpreted as field separators during the next load.
+ *
+ * @param c Candidate character from the alarm title.
+ * @return `true` if the character can be stored without percent-encoding.
+ */
+static bool isUnreservedAlarmChar(char c) {
+  return (c >= 'A' && c <= 'Z') ||
+         (c >= 'a' && c <= 'z') ||
+         (c >= '0' && c <= '9') ||
+         c == '-' || c == '_' || c == '.' || c == '~' || c == ' ';
+}
+
+/**
+ * @brief Percent-encodes an alarm title for compact string storage.
+ * @param title Raw alarm title entered by the user.
+ * @return Encoded title safe to place after the `schedule` field.
+ *
+ * @details
+ * Alarm storage is intentionally compact: the entire alarm list is written to a
+ * single NVS string using this record layout:
+ * `enabled,hour,minute,sound,schedule,title|enabled,hour,...`
+ *
+ * Since commas separate fields and pipes separate records, the title must be
+ * escaped before saving. This function keeps common readable characters as-is
+ * and converts everything else to `%HH` form.
+ */
+static String encodeAlarmTitle(const String &title) {
+  String encoded;
+  encoded.reserve(title.length() * 3);
+
+  for (size_t i = 0; i < title.length(); i++) {
+    char c = title[i];
+    if (isUnreservedAlarmChar(c)) {
+      encoded += c;
+    } else {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%%%02X", static_cast<unsigned char>(c));
+      encoded += buf;
+    }
+  }
+
+  return encoded;
+}
+
+/**
+ * @brief Converts one hexadecimal digit to an integer.
+ * @param c ASCII hex digit.
+ * @return The nibble value, or `-1` for invalid input.
+ */
+static int fromHexDigit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
+/**
+ * @brief Decodes a persisted alarm title back to plain text.
+ * @param encoded Percent-encoded title stored in NVS or submitted by the UI.
+ * @return Decoded, trimmed title text.
+ *
+ * @details
+ * The loader accepts titles in encoded form because the persistence and API
+ * layers share the same compact record format. Trimming the result prevents
+ * titles that contain only whitespace from surviving as visually empty labels.
+ */
+static String decodeAlarmTitle(const String &encoded) {
+  String decoded;
+  decoded.reserve(encoded.length());
+
+  for (size_t i = 0; i < encoded.length(); i++) {
+    char c = encoded[i];
+    if (c == '%' && i + 2 < encoded.length()) {
+      int hi = fromHexDigit(encoded[i + 1]);
+      int lo = fromHexDigit(encoded[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        decoded += static_cast<char>((hi << 4) | lo);
+        i += 2;
+        continue;
+      }
+    }
+    decoded += c;
+  }
+
+  decoded.trim();
+  return decoded;
+}
+
+/**
+ * @brief Loads alarm records from the `alarm/alarms` NVS key.
+ *
+ * @details
+ * The stored value is a single compact string that contains up to
+ * `MAX_ALARMS` pipe-separated records. The current format is:
+ * `enabled,hour,minute,sound,schedule,title`
+ *
+ * Example:
+ * `1,7,30,2,1,Weekday%20Wakeup|0,9,0,1,2,Weekend`
+ *
+ * Malformed or out-of-range records are skipped instead of partially loaded.
+ *
+ * The parser is deliberately strict on numeric ranges because the scheduler
+ * later assumes normalized values.
+ */
 void loadAlarms() {
   prefs.begin("alarm", true);
   String encoded = prefs.getString("alarms", "");
@@ -106,8 +251,8 @@ void loadAlarms() {
     return;
   }
 
-  // Format: enabled,hour,minute,sound[,schedule]|...
-  // Older records without schedule default to daily.
+  // Parse one pipe-delimited alarm record at a time so malformed entries can
+  // be skipped without discarding the entire persisted payload.
   int start = 0;
   while (start < encoded.length() && alarmCount < MAX_ALARMS) {
     int sep = encoded.indexOf('|', start);
@@ -118,16 +263,24 @@ void loadAlarms() {
     int p1 = (p0 >= 0) ? chunk.indexOf(',', p0 + 1) : -1;
     int p2 = (p1 >= 0) ? chunk.indexOf(',', p1 + 1) : -1;
     int p3 = (p2 >= 0) ? chunk.indexOf(',', p2 + 1) : -1;
+    int p4 = (p3 >= 0) ? chunk.indexOf(',', p3 + 1) : -1;
 
-    if (p0 >= 0 && p1 >= 0 && p2 >= 0) {
+    if (p0 >= 0 && p1 >= 0 && p2 >= 0 && p3 >= 0 && p4 >= 0) {
       bool enabled = chunk.substring(0, p0) == "1";
       uint8_t hour = chunk.substring(p0 + 1, p1).toInt();
       uint8_t minute = chunk.substring(p1 + 1, p2).toInt();
-      uint8_t sound = (p3 >= 0) ? chunk.substring(p2 + 1, p3).toInt() : chunk.substring(p2 + 1).toInt();
-      uint8_t schedule = (p3 >= 0) ? chunk.substring(p3 + 1).toInt() : ALARM_SCHEDULE_DAILY;
+      uint8_t sound = chunk.substring(p2 + 1, p3).toInt();
+      uint8_t schedule = chunk.substring(p3 + 1, p4).toInt();
+      String title = decodeAlarmTitle(chunk.substring(p4 + 1));
 
       if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT && schedule < ALARM_SCHEDULE_COUNT) {
-        alarms[alarmCount++] = {enabled, hour, minute, sound, schedule};
+        if (title.length() == 0) {
+          title = defaultAlarmTitle(alarmCount);
+        }
+        // Only fully validated records are admitted into the runtime array.
+        // This keeps the scheduler logic simple and protects against corrupt
+        // NVS data or partially edited payloads.
+        alarms[alarmCount++] = {enabled, hour, minute, sound, schedule, title};
       }
     }
 
@@ -135,6 +288,20 @@ void loadAlarms() {
   }
 }
 
+/**
+ * @brief Serializes the current alarm table into the `alarm/alarms` NVS key.
+ *
+ * @details
+ * The implementation writes all alarms as one string instead of separate keys.
+ * That keeps reads and writes simple and stable:
+ * - records are emitted in UI/scheduler order,
+ * - fields stay positional,
+ * - titles are percent-encoded to protect delimiters,
+ * - empty alarm slots beyond `alarmCount` are omitted entirely.
+ *
+ * The resulting format is human-readable enough for serial debugging while
+ * remaining compact for NVS storage.
+ */
 void saveAlarms() {
   String encoded;
   for (int i = 0; i < alarmCount; i++) {
@@ -148,6 +315,8 @@ void saveAlarms() {
     encoded += String(alarms[i].sound);
     encoded += ',';
     encoded += String(alarms[i].schedule);
+    encoded += ',';
+    encoded += encodeAlarmTitle(alarms[i].title);
   }
 
   prefs.begin("alarm", false);

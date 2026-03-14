@@ -1,0 +1,31 @@
+<map id="src/AlarmMelodies.cpp" name="src/AlarmMelodies.cpp">
+<area shape="rect" id="Node000001" title=" " alt="" coords="332,5,503,31"/>
+<area shape="rect" id="Node000002" title=" " alt="" coords="453,299,537,324"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="426,30,453,81,480,151,493,224,497,285,492,286,488,224,475,153,448,83,422,32"/>
+<area shape="rect" id="Node000003" href="$AlarmMelodies_8h.html" title=" " alt="" coords="299,79,431,104"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="411,33,384,69,380,66,407,29"/>
+<area shape="rect" id="Node000004" title=" " alt="" coords="391,152,465,177"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="378,103,411,140,407,143,374,106"/>
+<area shape="rect" id="Node000005" title=" " alt="" coords="295,152,366,177"/>
+<area shape="poly" id="edge4_Node000003_Node000005" title=" " alt="" coords="362,106,345,141,340,138,357,103"/>
+<area shape="rect" id="Node000006" href="$WebServerHandlers_8h.html" title="Shared declarations for the LED clock web UI and configuration API." alt="" coords="108,152,271,177"/>
+<area shape="poly" id="edge5_Node000003_Node000006" title=" " alt="" coords="338,106,232,149,230,144,336,102"/>
+<area shape="rect" id="Node000007" title=" " alt="" coords="121,225,223,251"/>
+<area shape="poly" id="edge6_Node000006_Node000007" title=" " alt="" coords="189,178,181,213,175,212,184,177"/>
+<area shape="rect" id="Node000008" title=" " alt="" coords="247,225,310,251"/>
+<area shape="poly" id="edge7_Node000006_Node000008" title=" " alt="" coords="205,175,255,214,252,219,202,179"/>
+<area shape="rect" id="Node000009" href="$PCF8574_8h.html" title=" " alt="" coords="5,225,96,251"/>
+<area shape="poly" id="edge8_Node000006_Node000009" title=" " alt="" coords="168,180,87,221,84,217,166,175"/>
+<area shape="rect" id="Node000011" href="$ESP32__RTC_8h.html" title=" " alt="" coords="541,225,646,251"/>
+<area shape="poly" id="edge11_Node000006_Node000011" title=" " alt="" coords="255,175,527,222,526,228,254,180"/>
+<area shape="rect" id="Node000014" href="$CommonTypes_8h.html" title=" " alt="" coords="335,225,465,251"/>
+<area shape="poly" id="edge15_Node000006_Node000014" title=" " alt="" coords="224,175,354,218,352,223,222,180"/>
+<area shape="poly" id="edge9_Node000009_Node000002" title=" " alt="" coords="97,246,108,248,439,300,439,305,108,253,96,251"/>
+<area shape="rect" id="Node000010" title=" " alt="" coords="19,299,83,324"/>
+<area shape="poly" id="edge10_Node000009_Node000010" title=" " alt="" coords="53,251,53,285,48,285,48,251"/>
+<area shape="poly" id="edge12_Node000011_Node000002" title=" " alt="" coords="579,253,523,293,520,288,576,249"/>
+<area shape="rect" id="Node000012" title=" " alt="" coords="561,299,625,324"/>
+<area shape="poly" id="edge13_Node000011_Node000012" title=" " alt="" coords="596,251,596,285,591,285,591,251"/>
+<area shape="rect" id="Node000013" title=" " alt="" coords="649,299,740,324"/>
+<area shape="poly" id="edge14_Node000011_Node000013" title=" " alt="" coords="611,248,668,288,665,293,608,253"/>
+</map>

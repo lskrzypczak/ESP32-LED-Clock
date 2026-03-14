@@ -1,0 +1,28 @@
+<map id="include/AlarmMelodies.h" name="include/AlarmMelodies.h">
+<area shape="rect" id="Node000001" title=" " alt="" coords="49,5,231,31"/>
+<area shape="rect" id="Node000002" title=" " alt="" coords="5,79,80,104"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="126,33,71,72,68,68,123,29"/>
+<area shape="rect" id="Node000003" title=" " alt="" coords="105,79,175,104"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="143,31,143,65,137,65,137,31"/>
+<area shape="rect" id="Node000004" href="$WebServerHandlers_8h.html" title="Shared declarations for the LED clock web UI and configuration API." alt="" coords="200,79,363,104"/>
+<area shape="poly" id="edge3_Node000001_Node000004" title=" " alt="" coords="164,28,247,70,245,75,162,33"/>
+<area shape="rect" id="Node000005" title=" " alt="" coords="22,152,125,177"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="249,107,121,150,119,145,247,101"/>
+<area shape="rect" id="Node000006" title=" " alt="" coords="149,152,211,177"/>
+<area shape="poly" id="edge5_Node000004_Node000006" title=" " alt="" coords="267,106,209,146,206,142,264,102"/>
+<area shape="rect" id="Node000007" href="$PCF8574_8h.html" title=" " alt="" coords="236,152,327,177"/>
+<area shape="poly" id="edge6_Node000004_Node000007" title=" " alt="" coords="284,104,284,138,279,138,279,104"/>
+<area shape="rect" id="Node000010" href="$ESP32__RTC_8h.html" title=" " alt="" coords="351,152,457,177"/>
+<area shape="poly" id="edge9_Node000004_Node000010" title=" " alt="" coords="302,102,374,143,371,147,300,106"/>
+<area shape="rect" id="Node000013" href="$CommonTypes_8h.html" title=" " alt="" coords="480,152,611,177"/>
+<area shape="poly" id="edge13_Node000004_Node000013" title=" " alt="" coords="324,101,490,146,489,151,323,107"/>
+<area shape="rect" id="Node000008" title=" " alt="" coords="263,225,347,251"/>
+<area shape="poly" id="edge7_Node000007_Node000008" title=" " alt="" coords="288,177,300,211,295,213,283,179"/>
+<area shape="rect" id="Node000009" title=" " alt="" coords="175,225,239,251"/>
+<area shape="poly" id="edge8_Node000007_Node000009" title=" " alt="" coords="271,179,231,218,227,214,268,175"/>
+<area shape="poly" id="edge10_Node000010_Node000008" title=" " alt="" coords="390,180,334,219,331,215,387,175"/>
+<area shape="rect" id="Node000011" title=" " alt="" coords="372,225,436,251"/>
+<area shape="poly" id="edge11_Node000010_Node000011" title=" " alt="" coords="407,178,407,212,401,212,401,178"/>
+<area shape="rect" id="Node000012" title=" " alt="" coords="460,225,551,251"/>
+<area shape="poly" id="edge12_Node000010_Node000012" title=" " alt="" coords="422,175,479,215,476,219,419,180"/>
+</map>

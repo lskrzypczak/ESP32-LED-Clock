@@ -1,0 +1,22 @@
+<map id="include/WebServerHandlers.h" name="include/WebServerHandlers.h">
+<area shape="rect" id="Node000001" title="Shared declarations for the LED clock web UI and configuration API." alt="" coords="158,5,371,31"/>
+<area shape="rect" id="Node000002" title=" " alt="" coords="5,79,108,104"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="232,33,104,77,103,72,230,28"/>
+<area shape="rect" id="Node000003" title=" " alt="" coords="132,79,195,104"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="250,33,193,73,190,68,247,28"/>
+<area shape="rect" id="Node000004" href="$PCF8574_8h.html" title=" " alt="" coords="219,79,310,104"/>
+<area shape="poly" id="edge3_Node000001_Node000004" title=" " alt="" coords="267,31,267,65,262,65,262,31"/>
+<area shape="rect" id="Node000007" href="$ESP32__RTC_8h.html" title=" " alt="" coords="335,79,440,104"/>
+<area shape="poly" id="edge6_Node000001_Node000007" title=" " alt="" coords="286,28,357,69,354,74,283,33"/>
+<area shape="rect" id="Node000010" href="$CommonTypes_8h.html" title=" " alt="" coords="463,79,594,104"/>
+<area shape="poly" id="edge10_Node000001_Node000010" title=" " alt="" coords="308,28,473,72,472,78,306,33"/>
+<area shape="rect" id="Node000005" title=" " alt="" coords="247,152,331,177"/>
+<area shape="poly" id="edge4_Node000004_Node000005" title=" " alt="" coords="271,103,283,138,278,140,266,105"/>
+<area shape="rect" id="Node000006" title=" " alt="" coords="158,152,222,177"/>
+<area shape="poly" id="edge5_Node000004_Node000006" title=" " alt="" coords="255,106,214,144,210,141,251,102"/>
+<area shape="poly" id="edge7_Node000007_Node000005" title=" " alt="" coords="373,106,317,146,314,142,370,102"/>
+<area shape="rect" id="Node000008" title=" " alt="" coords="355,152,419,177"/>
+<area shape="poly" id="edge8_Node000007_Node000008" title=" " alt="" coords="390,104,390,138,385,138,385,104"/>
+<area shape="rect" id="Node000009" title=" " alt="" coords="443,152,534,177"/>
+<area shape="poly" id="edge9_Node000007_Node000009" title=" " alt="" coords="405,102,462,142,459,146,402,106"/>
+</map>
