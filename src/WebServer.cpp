@@ -98,6 +98,7 @@ void handleApiStatus() {
     json += ",\"hour\":" + String(alarms[i].hour);
     json += ",\"minute\":" + String(alarms[i].minute);
     json += ",\"sound\":" + String(alarms[i].sound);
+    json += ",\"schedule\":" + String(alarms[i].schedule);
     json += "}";
     if (i < alarmCount - 1) json += ",";
   }
@@ -147,7 +148,7 @@ void handleApiWifi() {
 
 void handleApiAlarms() {
   // Expects a single form field 'alarms' with a pipe-separated list of alarms:
-  // enabled,hour,minute,sound|enabled,hour,minute,sound|...
+  // enabled,hour,minute,sound,schedule|...
   if (!server.hasArg("alarms")) {
     sendJson(400, "{\"success\":false,\"message\":\"Missing alarms parameter\"}");
     return;
@@ -172,15 +173,17 @@ void handleApiAlarms() {
     int p0 = chunk.indexOf(',');
     int p1 = (p0 >= 0) ? chunk.indexOf(',', p0 + 1) : -1;
     int p2 = (p1 >= 0) ? chunk.indexOf(',', p1 + 1) : -1;
+    int p3 = (p2 >= 0) ? chunk.indexOf(',', p2 + 1) : -1;
 
-    if (p0 >= 0 && p1 >= 0 && p2 >= 0) {
+    if (p0 >= 0 && p1 >= 0 && p2 >= 0 && p3 >= 0) {
       bool enabled = chunk.substring(0, p0) == "1";
       uint8_t hour = chunk.substring(p0 + 1, p1).toInt();
       uint8_t minute = chunk.substring(p1 + 1, p2).toInt();
-      uint8_t sound = chunk.substring(p2 + 1).toInt();
+      uint8_t sound = chunk.substring(p2 + 1, p3).toInt();
+      uint8_t schedule = chunk.substring(p3 + 1).toInt();
 
-      if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT) {
-        alarms[newCount++] = {enabled, hour, minute, sound};
+      if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT && schedule < ALARM_SCHEDULE_COUNT) {
+        alarms[newCount++] = {enabled, hour, minute, sound, schedule};
       }
     }
 

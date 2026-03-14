@@ -9,7 +9,7 @@
 #include "WebServerHandlers.h"
 
 // Default WiFi configuration
-const char* DEFAULT_WIFI_SSID = "SSID";        // Replace with your WiFi SSID
+const char* DEFAULT_WIFI_SSID = "Your_AP";        // Replace with your WiFi SSID
 const char* DEFAULT_WIFI_PASSWORD = "PASSWORD"; // Replace with your WiFi password
 
 // Stored/persistent WiFi configuration (loaded from NVS)
@@ -18,7 +18,7 @@ String wifiPassword;
 Preferences prefs;
 
 // Access Point configuration (fallback mode)
-const char* AP_SSID = "LED-Clock-AP";
+const char* AP_SSID = "LEDClock";
 const char* AP_PASSWORD = "clock1234";  // Minimum 8 characters for WPA2
 
 // Web server on port 80
@@ -96,8 +96,8 @@ void loadAlarms() {
     return;
   }
 
-  // Format: enabled,hour,minute,sound|enabled,hour,minute,sound|...
-  int idx = 0;
+  // Format: enabled,hour,minute,sound[,schedule]|...
+  // Older records without schedule default to daily.
   int start = 0;
   while (start < encoded.length() && alarmCount < MAX_ALARMS) {
     int sep = encoded.indexOf('|', start);
@@ -107,20 +107,21 @@ void loadAlarms() {
     int p0 = chunk.indexOf(',');
     int p1 = (p0 >= 0) ? chunk.indexOf(',', p0 + 1) : -1;
     int p2 = (p1 >= 0) ? chunk.indexOf(',', p1 + 1) : -1;
+    int p3 = (p2 >= 0) ? chunk.indexOf(',', p2 + 1) : -1;
 
     if (p0 >= 0 && p1 >= 0 && p2 >= 0) {
       bool enabled = chunk.substring(0, p0) == "1";
       uint8_t hour = chunk.substring(p0 + 1, p1).toInt();
       uint8_t minute = chunk.substring(p1 + 1, p2).toInt();
-      uint8_t sound = chunk.substring(p2 + 1).toInt();
+      uint8_t sound = (p3 >= 0) ? chunk.substring(p2 + 1, p3).toInt() : chunk.substring(p2 + 1).toInt();
+      uint8_t schedule = (p3 >= 0) ? chunk.substring(p3 + 1).toInt() : ALARM_SCHEDULE_DAILY;
 
-      if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT) {
-        alarms[alarmCount++] = {enabled, hour, minute, sound};
+      if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT && schedule < ALARM_SCHEDULE_COUNT) {
+        alarms[alarmCount++] = {enabled, hour, minute, sound, schedule};
       }
     }
 
     start = sep + 1;
-    idx++;
   }
 }
 
@@ -135,6 +136,8 @@ void saveAlarms() {
     encoded += String(alarms[i].minute);
     encoded += ',';
     encoded += String(alarms[i].sound);
+    encoded += ',';
+    encoded += String(alarms[i].schedule);
   }
 
   prefs.begin("alarm", false);
@@ -203,6 +206,20 @@ const uint8_t ANIM_DELAY_STEPS = 2; // How many animation frames between each di
 // Alarm state tracking
 bool alarmTriggered[MAX_ALARMS] = {false};
 int lastAlarmMinute = -1;
+
+bool isAlarmScheduledForToday(uint8_t schedule, uint8_t dayOfWeek) {
+  bool isWeekend = (dayOfWeek == 0 || dayOfWeek == 6);
+
+  switch (schedule) {
+    case ALARM_SCHEDULE_WEEKDAYS:
+      return !isWeekend;
+    case ALARM_SCHEDULE_WEEKENDS:
+      return isWeekend;
+    case ALARM_SCHEDULE_DAILY:
+    default:
+      return true;
+  }
+}
 
 // Helper: return the row bytes for a digit position, applying slide-up animation when active
 uint8_t getDigitRow(uint8_t pos, uint8_t row) {
@@ -284,6 +301,11 @@ void beep(int count = 1) {
   }
 }
 
+void shortBeep() {
+  playNote(1000, 10); // Beep at 1kHz for 100ms
+  delay(100);
+}
+
 // WiFi connection function with AP fallback
 bool connectToWiFi() {
   Serial.println("Attempting to connect to WiFi network...");
@@ -296,7 +318,8 @@ bool connectToWiFi() {
 
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) { // 20 attempts = ~10 seconds
-    delay(500);
+    delay(400);
+    shortBeep();
     Serial.print(".");
     attempts++;
   }
@@ -310,10 +333,13 @@ bool connectToWiFi() {
   } else {
     Serial.println("\nWiFi network connection failed!");
     Serial.println("Starting Access Point mode as fallback...");
+
+    WiFi.disconnect(true);
+    delay(500);
     
     // Start Access Point mode
     WiFi.mode(WIFI_AP);
-    if (WiFi.softAP(AP_SSID, AP_PASSWORD)) {
+    if (WiFi.softAP(AP_SSID, /*AP_PASSWORD*/NULL, 13, false, 4)) {
       Serial.println("Access Point started successfully!");
       Serial.print("AP SSID: ");
       Serial.println(AP_SSID);
@@ -479,7 +505,11 @@ void loop() {
     }
 
     for (int i = 0; i < alarmCount; i++) {
-      if (!alarmTriggered[i] && alarms[i].enabled && now.hour == alarms[i].hour && now.minute == alarms[i].minute) {
+      if (!alarmTriggered[i] &&
+          alarms[i].enabled &&
+          isAlarmScheduledForToday(alarms[i].schedule, now.dayOfWeek) &&
+          now.hour == alarms[i].hour &&
+          now.minute == alarms[i].minute) {
         alarmTriggered[i] = true;
 
         switch (alarms[i].sound) {

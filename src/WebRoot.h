@@ -81,6 +81,13 @@ static const char index_html[] PROGMEM = R"rawliteral(<!doctype html>
       <label><input type="checkbox" v-model="alarm.enabled"> Enabled</label>
       <label>Hour: <input type="number" v-model.number="alarm.hour" min="0" max="23"></label>
       <label>Minute: <input type="number" v-model.number="alarm.minute" min="0" max="59"></label>
+      <label>Days:
+        <select v-model.number="alarm.schedule">
+          <option :value="0">Every day</option>
+          <option :value="1">Weekdays</option>
+          <option :value="2">Weekends</option>
+        </select>
+      </label>
       <label>Sound:
         <select v-model.number="alarm.sound">
           <option :value="0">Siren</option>
@@ -145,7 +152,15 @@ createApp({
         this.time.minute = data.minute || 0;
         this.time.second = data.second || 0;
         this.wifi.ssid = data.wifiSsid || '';
-        this.alarms = Array.isArray(data.alarms) ? data.alarms : [];
+        this.alarms = Array.isArray(data.alarms)
+          ? data.alarms.map(alarm => ({
+              enabled: !!alarm.enabled,
+              hour: Number.isFinite(alarm.hour) ? alarm.hour : 0,
+              minute: Number.isFinite(alarm.minute) ? alarm.minute : 0,
+              sound: Number.isFinite(alarm.sound) ? alarm.sound : 0,
+              schedule: Number.isFinite(alarm.schedule) ? alarm.schedule : 0
+            }))
+          : [];
       } catch (e) {
         this.message = 'Failed to load status';
       } finally {
@@ -182,7 +197,7 @@ createApp({
     },
     addAlarm() {
       if (this.alarms.length < 6) {
-        this.alarms.push({ enabled: false, hour: 0, minute: 0, sound: 0 });
+        this.alarms.push({ enabled: false, hour: 0, minute: 0, sound: 0, schedule: 0 });
       }
     },
     removeAlarm(index) {
@@ -192,7 +207,8 @@ createApp({
       const body = new URLSearchParams();
       const encoded = this.alarms.map(a => {
         const enabled = a.enabled ? '1' : '0';
-        return `${enabled},${a.hour},${a.minute},${a.sound}`;
+        const schedule = Number.isFinite(a.schedule) ? a.schedule : 0;
+        return `${enabled},${a.hour},${a.minute},${a.sound},${schedule}`;
       }).join('|');
       body.append('alarms', encoded);
       const res = await fetch('/api/alarms', { method: 'POST', body });

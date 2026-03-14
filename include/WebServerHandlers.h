@@ -30,11 +30,19 @@ enum AlarmSound : uint8_t {
   ALARM_SOUND_COUNT
 };
 
+enum AlarmSchedule : uint8_t {
+  ALARM_SCHEDULE_DAILY = 0,
+  ALARM_SCHEDULE_WEEKDAYS = 1,
+  ALARM_SCHEDULE_WEEKENDS = 2,
+  ALARM_SCHEDULE_COUNT
+};
+
 struct AlarmConfig {
   bool enabled;
   uint8_t hour;
   uint8_t minute;
   uint8_t sound;
+  uint8_t schedule;
 };
 
 extern AlarmConfig alarms[MAX_ALARMS];
