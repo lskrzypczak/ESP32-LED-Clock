@@ -26,7 +26,11 @@ const int MAX_ALARMS = 6;
 enum AlarmSound : uint8_t {
   ALARM_SOUND_SIREN = 0,
   ALARM_SOUND_BEEP = 1,
-  ALARM_SOUND_MELODY = 2,
+  ALARM_SOUND_FANFARE = 2,
+  ALARM_SOUND_NOKIA = 3,
+  ALARM_SOUND_SMS = 4,
+  ALARM_SOUND_MOTOROLA = 5,
+  ALARM_SOUND_SIEMENS = 6,
   ALARM_SOUND_COUNT
 };
 
@@ -51,8 +55,8 @@ extern int alarmCount;
 // Shared helper functions (implemented in main.cpp)
 extern int getEffectiveGmtOffset();
 extern int getEffectiveDstOffset();
-extern void playFanfare();
 extern void beep(int count);
+extern void playAlarmSound(uint8_t sound);
 
 // WiFi credential persistence
 extern void loadWifiCredentials();
@@ -64,10 +68,12 @@ extern void saveAlarms();
 
 // Web server handler functions
 void handleRoot();
+void handleFavicon();
 void handleApiStatus();
 void handleApiSetTime();
 void handleApiWifi();
 void handleApiAlarms();
+void handleApiAlarmTest();
 void handleApiTimezone();
 void handleNotFound();
 

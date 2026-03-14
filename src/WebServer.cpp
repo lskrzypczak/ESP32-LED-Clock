@@ -1,5 +1,6 @@
 #include "WebServerHandlers.h"
 #include "WebRoot.h"
+#include "AlarmMelodies.h"
 #include <Arduino.h>
 #include <WiFi.h>
 
@@ -55,7 +56,7 @@ void handleSetTimePost() {
     rtc.setDateTime(now.year, now.month, now.day, hour, minute, second);
     
     server.send(200, "text/html", "<html><body><h1>Time Set Successfully!</h1><p><a href='/'>Back to Home</a></p></body></html>");
-    // Note: playFanfare() is defined in main.cpp, so we can't call it from here
+    // Audio feedback is handled by shared melody helpers.
     // The caller should handle audio feedback
   } else {
     server.send(400, "text/html", "<html><body><h1>Error: Missing parameters</h1><p><a href='/settime'>Try again</a></p></body></html>");
@@ -135,13 +136,20 @@ void handleApiWifi() {
     String newSSID = server.arg("ssid");
     String newPassword = server.arg("password");
 
+    Serial.print("New SSID: ");
+    Serial.println(newSSID);
+    Serial.print("New Password: ");
+    Serial.println(newPassword);
+
     // Persist credentials to NVS so they remain across reboots
     saveWifiCredentials(newSSID, newPassword);
 
+    Serial.println("Credentials saved, restarting");
     sendJson(200, "{\"success\":true,\"message\":\"Saved - restarting\"}");
     delay(2000);
     ESP.restart();
   } else {
+    Serial.println("Missing SSID or password");
     sendJson(400, "{\"success\":false,\"message\":\"Invalid request\"}");
   }
 }
@@ -195,6 +203,22 @@ void handleApiAlarms() {
   sendJson(200, "{\"success\":true,\"message\":\"Alarms saved\"}");
 }
 
+void handleApiAlarmTest() {
+  if (!server.hasArg("sound")) {
+    sendJson(400, "{\"success\":false,\"message\":\"Missing sound parameter\"}");
+    return;
+  }
+
+  int sound = server.arg("sound").toInt();
+  if (sound < 0 || sound >= ALARM_SOUND_COUNT) {
+    sendJson(400, "{\"success\":false,\"message\":\"Invalid sound\"}");
+    return;
+  }
+
+  playAlarmSound(static_cast<uint8_t>(sound));
+  sendJson(200, "{\"success\":true,\"message\":\"Sound played\"}");
+}
+
 void handleApiTimezone() {
   if (server.hasArg("timezone") && server.hasArg("dstmode")) {
     int newTimezoneIndex = server.arg("timezone").toInt();
@@ -237,11 +261,17 @@ void handleApiTimezone() {
 }
 
 void handleNotFound() {
+  Serial.print("Not found request: ");
+  Serial.println(server.uri());
   if (server.uri().startsWith("/api/")) {
     sendJson(404, "{\"success\":false,\"message\":\"Not found\"}");
   } else {
     handleRoot();
   }
+}
+
+void handleFavicon() {
+  server.send(204); // No Content
 }
 void handleWiFiSettings() {
   String html = "<html><head><title>WiFi Settings</title></head><body>";

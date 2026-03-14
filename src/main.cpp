@@ -2,10 +2,14 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 #include "PCF8574.h"
 #include "ESP32_RTC.h"
 #include "Digits5x8.h"
 #include "CommonTypes.h"
+#include "AlarmMelodies.h"
 #include "WebServerHandlers.h"
 
 // Default WiFi configuration
@@ -74,12 +78,18 @@ void loadWifiCredentials() {
 }
 
 void saveWifiCredentials(const String &ssid, const String &password) {
+  Serial.println("Saving WiFi credentials to NVS");
+  Serial.print("SSID: ");
+  Serial.println(ssid);
+  Serial.print("Password length: ");
+  Serial.println(password.length());
   prefs.begin("wifi", false);
   prefs.putString("ssid", ssid);
   prefs.putString("pass", password);
   prefs.end();
   wifiSsid = ssid;
   wifiPassword = password;
+  Serial.println("Credentials saved to NVS and globals updated");
 }
 
 // Alarm persistence
@@ -207,6 +217,16 @@ const uint8_t ANIM_DELAY_STEPS = 2; // How many animation frames between each di
 bool alarmTriggered[MAX_ALARMS] = {false};
 int lastAlarmMinute = -1;
 
+// RTOS mutex for protecting shared digit data
+SemaphoreHandle_t digitMutex;
+
+// Task handles
+TaskHandle_t webServerTaskHandle;
+TaskHandle_t timeAlarmTaskHandle;
+TaskHandle_t animationTaskHandle;
+TaskHandle_t displayTaskHandle;
+TaskHandle_t heartbeatTaskHandle;
+
 bool isAlarmScheduledForToday(uint8_t schedule, uint8_t dayOfWeek) {
   bool isWeekend = (dayOfWeek == 0 || dayOfWeek == 6);
 
@@ -265,18 +285,6 @@ void playNote(unsigned int frequency, unsigned long duration) {
   }
 }
 
-void playFanfare() {
-  // Fanfare notes: C5, E5, G5, C6
-  playNote(523, 200);  // C5
-  delay(50);
-  playNote(659, 200);  // E5
-  delay(50);
-  playNote(784, 200);  // G5
-  delay(50);
-  playNote(1047, 400); // C6
-  delay(100);
-}
-
 void playSiren() {
   // Short siren sound for WiFi fallback activation
   // Rising siren: 800Hz to 1200Hz
@@ -306,6 +314,29 @@ void shortBeep() {
   delay(100);
 }
 
+void playAlarmSound(uint8_t sound) {
+  switch (sound) {
+    case ALARM_SOUND_BEEP:
+      playNote(1000, 200);
+      delay(100);
+      playNote(1000, 200);
+      delay(100);
+      playNote(1000, 200);
+      break;
+    case ALARM_SOUND_FANFARE:
+    case ALARM_SOUND_NOKIA:
+    case ALARM_SOUND_SMS:
+    case ALARM_SOUND_MOTOROLA:
+    case ALARM_SOUND_SIEMENS:
+      playAlarmMelody(sound);
+      break;
+    case ALARM_SOUND_SIREN:
+    default:
+      playSiren();
+      break;
+  }
+}
+
 // WiFi connection function with AP fallback
 bool connectToWiFi() {
   Serial.println("Attempting to connect to WiFi network...");
@@ -313,6 +344,11 @@ bool connectToWiFi() {
   // Ensure we have credentials loaded (fallback to defaults if not)
   if (wifiSsid.length() == 0) wifiSsid = DEFAULT_WIFI_SSID;
   if (wifiPassword.length() == 0) wifiPassword = DEFAULT_WIFI_PASSWORD;
+
+  Serial.print("Using SSID: ");
+  Serial.println(wifiSsid);
+  Serial.print("Using Password: ");
+  Serial.println(wifiPassword.length() > 0 ? "[hidden]" : "[empty]");
 
   WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
 
@@ -358,13 +394,134 @@ bool connectToWiFi() {
 
 // Web server setup function
 void setupWebServer() {
+  Serial.println("Setting up web server routes");
   server.on("/", handleRoot);
+  server.on("/favicon.ico", HTTP_GET, handleFavicon);
   server.on("/api/status", HTTP_GET, handleApiStatus);
   server.on("/api/settime", HTTP_POST, handleApiSetTime);
   server.on("/api/wifi", HTTP_POST, handleApiWifi);
   server.on("/api/timezone", HTTP_POST, handleApiTimezone);
   server.on("/api/alarms", HTTP_POST, handleApiAlarms);
+  server.on("/api/alarm/test", HTTP_POST, handleApiAlarmTest);
   server.onNotFound(handleNotFound);
+  Serial.println("Web server routes registered");
+}
+
+// RTOS Task Functions
+void webServerTask(void *pvParameters) {
+  while (true) {
+    server.handleClient();
+    vTaskDelay(1 / portTICK_PERIOD_MS); // Small delay to yield
+  }
+}
+
+void timeAlarmTask(void *pvParameters) {
+  while (true) {
+    DateTime now = rtc.now();
+
+    char timeStr[9];
+    rtc.getTimeString(timeStr);
+
+    // Calculate new digit values and start animation where digits changed
+    uint8_t newDigits[4] = {
+      (uint8_t)(now.hour / 10),
+      (uint8_t)(now.hour % 10),
+      (uint8_t)(now.minute / 10),
+      (uint8_t)(now.minute % 10)
+    };
+
+    xSemaphoreTake(digitMutex, portMAX_DELAY);
+    for (int i = 0; i < 4; i++) {
+      if (newDigits[i] != nextDigits[i]) {
+        // Start animation for this digit (cascade with delay)
+        currentDigits[i] = nextDigits[i];
+        nextDigits[i] = newDigits[i];
+        animStep[i] = 0;
+        animDelay[i] = i * ANIM_DELAY_STEPS; // cascade delay based on digit position
+      }
+    }
+    xSemaphoreGive(digitMutex);
+
+    // Check alarms once per minute and trigger those that match
+    int currentMinute = now.minute;
+    if (currentMinute != lastAlarmMinute) {
+      lastAlarmMinute = currentMinute;
+      for (int i = 0; i < alarmCount; i++) {
+        alarmTriggered[i] = false;
+      }
+    }
+
+    for (int i = 0; i < alarmCount; i++) {
+      if (!alarmTriggered[i] &&
+          alarms[i].enabled &&
+          isAlarmScheduledForToday(alarms[i].schedule, now.dayOfWeek) &&
+          now.hour == alarms[i].hour &&
+          now.minute == alarms[i].minute) {
+        alarmTriggered[i] = true;
+        playAlarmSound(alarms[i].sound);
+      }
+    }
+
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+}
+
+void animationTask(void *pvParameters) {
+  while (true) {
+    xSemaphoreTake(digitMutex, portMAX_DELAY);
+    for (int i = 0; i < 4; i++) {
+      if (animStep[i] < DIGIT_HEIGHT) {
+        if (animDelay[i] > 0) {
+          animDelay[i]--;
+          continue;
+        }
+        animStep[i]++;
+        if (animStep[i] >= DIGIT_HEIGHT) {
+          // Animation finished: commit the new digit
+          currentDigits[i] = nextDigits[i];
+          animStep[i] = DIGIT_HEIGHT;
+        }
+      }
+    }
+    xSemaphoreGive(digitMutex);
+
+    vTaskDelay(ANIM_STEP_MS / portTICK_PERIOD_MS);
+  }
+}
+
+void displayTask(void *pvParameters) {
+  while (true) {
+    xSemaphoreTake(digitMutex, portMAX_DELAY);
+    // Set expanders 1-4 to the values from the display array. Each digit is one expander. Low is active.
+    expander_0.write8(0x00); // Row control pins (active LOW)
+    expander_1.write8(~getDigitRow(0, currentRow)); // Digit 0
+    expander_2.write8(~getDigitRow(1, currentRow)); // Digit 1
+    expander_3.write8(~getDigitRow(2, currentRow)); // Digit 2
+    expander_4.write8(~getDigitRow(3, currentRow)); // Digit 3
+    expander_0.write8(rowPinValue);
+    xSemaphoreGive(digitMutex);
+
+    rowPinValue <<= 1;
+    if (rowPinValue == 0x80) {
+      rowPinValue = 0x00; // After the last row, set to 0 to turn off all rows before resetting to 0x01
+    }
+    currentRow++;
+    if (currentRow >= DIGIT_HEIGHT) {
+      currentRow = 0;
+      rowPinValue = 0x01;
+    }
+
+    vTaskDelay(1 / portTICK_PERIOD_MS); // Fast update
+  }
+}
+
+void heartbeatTask(void *pvParameters) {
+  bool ledState = false;
+  while (true) {
+    digitalWrite(DP_LED_PIN, ledState ? LOW : HIGH);
+    ledState = !ledState;
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+  }
 }
 
 void setup() {
@@ -397,6 +554,13 @@ void setup() {
     setupWebServer();
     server.begin();
     Serial.println("Web server started");
+    if (wifiModeAP) {
+      Serial.print("AP IP: ");
+      Serial.println(WiFi.softAPIP());
+    } else {
+      Serial.print("Station IP: ");
+      Serial.println(WiFi.localIP());
+    }
     
     // Sync time with NTP only if connected to external network (not AP mode)
     if (!wifiModeAP) {
@@ -461,123 +625,21 @@ void setup() {
   expander_2.write8(0xFF); // All pins HIGH
   expander_3.write8(0xFF); // All pins HIGH
   expander_4.write8(0xFF); // All pins HIGH
+
+  // Initialize RTOS mutex
+  digitMutex = xSemaphoreCreateMutex();
+
+  // Create RTOS tasks
+  xTaskCreate(webServerTask, "WebServer", 4096, NULL, 4, &webServerTaskHandle);
+  xTaskCreate(timeAlarmTask, "TimeAlarm", 2048, NULL, 2, &timeAlarmTaskHandle);
+  xTaskCreate(animationTask, "Animation", 1024, NULL, 2, &animationTaskHandle);
+  xTaskCreate(displayTask, "Display", 1024, NULL, 3, &displayTaskHandle);
+  xTaskCreate(heartbeatTask, "Heartbeat", 512, NULL, 1, &heartbeatTaskHandle);
+
+  Serial.println("RTOS tasks created");
 }
 
 void loop() {
-  // Handle web server requests
-  server.handleClient();
-  
-  static unsigned long lastUpdate = 0;
-  static unsigned long lastToggle = 0;
-    
-  // Display time update every 1 second
-  if (millis() - lastUpdate > 1000) {
-    DateTime now = rtc.now();
-
-    char timeStr[9];
-    rtc.getTimeString(timeStr);
-
-    // Calculate new digit values and start animation where digits changed
-    uint8_t newDigits[4] = {
-      (uint8_t)(now.hour / 10),
-      (uint8_t)(now.hour % 10),
-      (uint8_t)(now.minute / 10),
-      (uint8_t)(now.minute % 10)
-    };
-
-    for (int i = 0; i < 4; i++) {
-      if (newDigits[i] != nextDigits[i]) {
-        // Start animation for this digit (cascade with delay)
-        currentDigits[i] = nextDigits[i];
-        nextDigits[i] = newDigits[i];
-        animStep[i] = 0;
-        animDelay[i] = i * ANIM_DELAY_STEPS; // cascade delay based on digit position
-      }
-    }
-
-    // Check alarms once per minute and trigger those that match
-    int currentMinute = now.minute;
-    if (currentMinute != lastAlarmMinute) {
-      lastAlarmMinute = currentMinute;
-      for (int i = 0; i < alarmCount; i++) {
-        alarmTriggered[i] = false;
-      }
-    }
-
-    for (int i = 0; i < alarmCount; i++) {
-      if (!alarmTriggered[i] &&
-          alarms[i].enabled &&
-          isAlarmScheduledForToday(alarms[i].schedule, now.dayOfWeek) &&
-          now.hour == alarms[i].hour &&
-          now.minute == alarms[i].minute) {
-        alarmTriggered[i] = true;
-
-        switch (alarms[i].sound) {
-          case ALARM_SOUND_BEEP:
-            playNote(1000, 200);
-            delay(100);
-            playNote(1000, 200);
-            delay(100);
-            playNote(1000, 200);
-            break;
-          case ALARM_SOUND_MELODY:
-            playFanfare();
-            break;
-          case ALARM_SOUND_SIREN:
-          default:
-            playSiren();
-            break;
-        }
-      }
-    }
-
-    lastUpdate = millis();
-  }
-
-  // Advance animation stepframes at a fixed rate
-  if (millis() - lastAnimMillis > ANIM_STEP_MS) {
-    lastAnimMillis = millis();
-    for (int i = 0; i < 4; i++) {
-      if (animStep[i] < DIGIT_HEIGHT) {
-        if (animDelay[i] > 0) {
-          animDelay[i]--;
-          continue;
-        }
-        animStep[i]++;
-        if (animStep[i] >= DIGIT_HEIGHT) {
-          // Animation finished: commit the new digit
-          currentDigits[i] = nextDigits[i];
-          animStep[i] = DIGIT_HEIGHT;
-        }
-      }
-    }
-  }
-
-  // Toggle LED on pin 0 as heartbeat
-  if (millis() - lastToggle > 500) {
-    static bool ledState = false;
-    digitalWrite(DP_LED_PIN, ledState ? LOW : HIGH);
-    ledState = !ledState;
-    lastToggle = millis();
-  }
-
-  // Set expanders 1-4 to the values from the display array. Each digit is one expander. Low is active.
-  expander_0.write8(0x00); // Row control pins (active LOW)
-  expander_1.write8(~getDigitRow(0, currentRow)); // Digit 0
-  expander_2.write8(~getDigitRow(1, currentRow)); // Digit 1
-  expander_3.write8(~getDigitRow(2, currentRow)); // Digit 2
-  expander_4.write8(~getDigitRow(3, currentRow)); // Digit 3
-  expander_0.write8(rowPinValue);
-  // delay(1); // Short delay to allow display to update
-
-  rowPinValue <<= 1;
-  if (rowPinValue == 0x80) {
-    rowPinValue = 0x00; // After the last row, set to 0 to turn off all rows before resetting to 0x01
-  }
-  currentRow++;
-  if (currentRow >= DIGIT_HEIGHT) {
-    currentRow = 0;
-    rowPinValue = 0x01;
-  }
-  
+  // All functionality moved to RTOS tasks
+  vTaskDelay(portMAX_DELAY); // Suspend this task
 }
