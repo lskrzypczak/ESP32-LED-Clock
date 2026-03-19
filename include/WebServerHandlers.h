@@ -14,6 +14,7 @@
 
 #include <WebServer.h>
 #include <WiFi.h>
+#include "Digits5x8.h"
 #include "PCF8574.h"
 #include "ESP32_RTC.h"
 #include "CommonTypes.h"
@@ -71,7 +72,14 @@ enum AlarmSchedule : uint8_t {
   ALARM_SCHEDULE_DAILY = 0,
   ALARM_SCHEDULE_WEEKDAYS = 1,
   ALARM_SCHEDULE_WEEKENDS = 2,
+  ALARM_SCHEDULE_SINGLE = 3,
   ALARM_SCHEDULE_COUNT
+};
+
+enum SnoozeButtonAction : uint8_t {
+  SNOOZE_BUTTON_ACTION_SNOOZE = 0,
+  SNOOZE_BUTTON_ACTION_DISMISS = 1,
+  SNOOZE_BUTTON_ACTION_COUNT
 };
 
 /**
@@ -79,7 +87,7 @@ enum AlarmSchedule : uint8_t {
  *
  * Alarm records are persisted as a compact pipe-separated list in NVS under
  * the `alarm/alarms` key. Each record stores the fields in this order:
- * `enabled,hour,minute,sound,schedule,title`.
+ * `enabled,hour,minute,sound,schedule,buttonAction,snoozeMinutes,title`.
  *
  * The `title` field is percent-encoded before storage so commas and pipe
  * characters cannot corrupt parsing.
@@ -95,6 +103,10 @@ struct AlarmConfig {
   uint8_t sound;
   /** @brief Recurrence mode from `AlarmSchedule`. */
   uint8_t schedule;
+  /** @brief GPIO0 action to apply while this alarm is active. */
+  uint8_t buttonAction;
+  /** @brief Snooze duration in minutes for this alarm. */
+  uint8_t snoozeMinutes;
   /** @brief User-visible label shown in the web UI alarm tabs. */
   String title;
 };
@@ -117,6 +129,10 @@ extern void playAlarmSound(uint8_t sound);
 extern void loadWifiCredentials();
 /** @brief Saves WiFi credentials to NVS and updates the globals. */
 extern void saveWifiCredentials(const String &ssid, const String &password);
+/** @brief Loads the persisted display font and applies it to the digit renderer. */
+extern void loadDigitFont();
+/** @brief Persists the selected display font and applies it immediately. */
+extern void saveDigitFont(Digits5x8::FontStyle font);
 
 /**
  * @brief Loads alarm definitions from NVS into `alarms`.
@@ -149,6 +165,8 @@ void handleApiAlarms();
 void handleApiAlarmTest();
 /** @brief Updates timezone and DST settings from the web UI. */
 void handleApiTimezone();
+/** @brief Updates display settings from the web UI. */
+void handleApiSettings();
 /** @brief Handles unknown routes, delegating non-API paths to the SPA. */
 void handleNotFound();
 

@@ -2,12 +2,24 @@
 #include "AlarmMelodies.h"
 
 extern void playNote(unsigned int frequency, unsigned long duration);
+extern bool shouldAbortAlarmPlayback();
 
 static void playMelody(const MelodyNote *notes, size_t noteCount) {
   for (size_t i = 0; i < noteCount; i++) {
+    if (shouldAbortAlarmPlayback()) {
+      return;
+    }
     playNote(notes[i].frequency, notes[i].duration);
     if (notes[i].pauseAfter > 0) {
-      delay(notes[i].pauseAfter);
+      uint16_t remaining = notes[i].pauseAfter;
+      while (remaining > 0) {
+        if (shouldAbortAlarmPlayback()) {
+          return;
+        }
+        uint16_t step = remaining > 20 ? 20 : remaining;
+        delay(step);
+        remaining -= step;
+      }
     }
   }
 }

@@ -162,21 +162,23 @@ static const char index_html[] PROGMEM = R"rawliteral(<!doctype html>
     .alarm-editor-grid {
       display: grid;
       gap: 0.85rem;
-      grid-template-columns: repeat(auto-fit, minmax(110px, max-content));
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       align-items: end;
-      max-width: 560px;
+      width: 100%;
+      max-width: 100%;
     }
     .alarm-editor-grid label {
       margin: 0;
+      min-width: 0;
     }
     .alarm-title-field input {
-      width: min(220px, 100%);
+      width: 100%;
     }
     .alarm-time-field input {
-      width: 88px;
+      width: 100%;
     }
     .alarm-select-field select {
-      width: 160px;
+      width: 100%;
     }
     .alarm-inline-check {
       display: flex;
@@ -229,6 +231,7 @@ static const char index_html[] PROGMEM = R"rawliteral(<!doctype html>
     <button class="tab-button active" type="button" data-tab="status" aria-selected="true">Status</button>
     <button class="tab-button" type="button" data-tab="time" aria-selected="false">Set Time</button>
     <button class="tab-button" type="button" data-tab="timezone" aria-selected="false">Timezone</button>
+    <button class="tab-button" type="button" data-tab="settings" aria-selected="false">Settings</button>
     <button class="tab-button" type="button" data-tab="alarms" aria-selected="false">Alarms</button>
     <button id="wifi-tab" class="tab-button hidden" type="button" data-tab="wifi" aria-selected="false">WiFi</button>
   </div>
@@ -245,6 +248,10 @@ static const char index_html[] PROGMEM = R"rawliteral(<!doctype html>
         <div class="status-item">
           <strong>Timezone</strong>
           <span id="status-timezone"></span>
+        </div>
+        <div class="status-item">
+          <strong>Font</strong>
+          <span id="status-font"></span>
         </div>
         <div class="status-item">
           <strong>DST</strong>
@@ -318,6 +325,20 @@ static const char index_html[] PROGMEM = R"rawliteral(<!doctype html>
     </div>
   </section>
 
+  <section id="tab-settings" class="tab-panel hidden">
+    <div class="card">
+      <h2>Settings</h2>
+      <div class="compact-grid timezone-grid compact-section">
+        <label>Digit font:
+          <select id="font-select"></select>
+        </label>
+      </div>
+      <div class="button-row">
+        <button id="submit-settings" type="button">Save Settings</button>
+      </div>
+    </div>
+  </section>
+
   <section id="tab-alarms" class="tab-panel hidden">
     <div class="card">
       <h2>Alarms</h2>
@@ -377,6 +398,11 @@ function selectedDstMode() {
   return byId('dst-manual').checked ? 'manual' : 'auto';
 }
 
+function selectedFontIndex() {
+  const availableFonts = Array.isArray(state.status.fonts) ? state.status.fonts.length : 1;
+  return clampNumber(byId('font-select').value, 0, Math.max(availableFonts - 1, 0));
+}
+
 function setActiveTab(tabName) {
   state.activeTab = tabName;
 
@@ -418,6 +444,7 @@ function renderStatus(data) {
   byId('status-timezone').textContent = data.timezone
     ? `${data.timezone.name} (${data.timezone.description})`
     : '';
+  byId('status-font').textContent = data.font ? data.font.name : '';
   byId('status-dst').textContent = data.dstMode || '';
   byId('status-dst-offset').textContent = String((data.manualDstOffset || 0) / 3600);
   byId('status-wifi-mode').textContent = data.wifiMode || '';
@@ -443,6 +470,7 @@ function renderStatus(data) {
   }
 
   renderTimezoneControls(data);
+  renderSettingsControls(data);
 }
 
 function syncTimeControls(data) {
@@ -459,22 +487,35 @@ function syncTimeControls(data) {
 }
 
 function renderTimezoneControls(data) {
-  const select = byId('timezone-select');
-  select.innerHTML = '';
+  const timezoneSelect = byId('timezone-select');
+  timezoneSelect.innerHTML = '';
 
   (data.timezones || []).forEach((tz) => {
     const option = document.createElement('option');
     option.value = String(tz.index);
     option.textContent = `${tz.name} - ${tz.description}`;
-    select.appendChild(option);
+    timezoneSelect.appendChild(option);
   });
 
-  select.value = String(data.timezoneIndex || 0);
+  timezoneSelect.value = String(data.timezoneIndex || 0);
+
   const isManual = data.dstMode === 'manual';
   byId('dst-auto').checked = !isManual;
   byId('dst-manual').checked = isManual;
   byId('manual-dst-select').value = String(data.manualDstOffset || 0);
   toggleHidden('manual-dst-row', !isManual);
+}
+
+function renderSettingsControls(data) {
+  const fontSelect = byId('font-select');
+  fontSelect.innerHTML = '';
+  (data.fonts || []).forEach((font) => {
+    const option = document.createElement('option');
+    option.value = String(font.index);
+    option.textContent = font.name;
+    fontSelect.appendChild(option);
+  });
+  fontSelect.value = String(data.fontIndex || 0);
 }
 
 function normalizeAlarm(alarm) {
@@ -483,9 +524,18 @@ function normalizeAlarm(alarm) {
     hour: clampNumber(alarm.hour, 0, 23),
     minute: clampNumber(alarm.minute, 0, 59),
     sound: clampNumber(alarm.sound, 0, 6),
-    schedule: clampNumber(alarm.schedule, 0, 2),
+    schedule: clampNumber(alarm.schedule, 0, 3),
+    buttonAction: clampNumber(alarm.buttonAction, 0, 1),
+    snoozeMinutes: clampNumber(alarm.snoozeMinutes, 1, 60),
     title: (alarm.title || '').trim()
   };
+}
+
+function updateAlarmSnoozeVisibility() {
+  const action = clampNumber(byId('alarm-button-action').value, 0, 1);
+  const showSnooze = action === 0;
+  toggleHidden('alarm-snooze-minutes-row', !showSnooze);
+  byId('alarm-snooze-minutes').disabled = !showSnooze;
 }
 
 function setActiveAlarm(index) {
@@ -563,6 +613,7 @@ function renderAlarms() {
           <option value="0">Every day</option>
           <option value="1">Weekdays</option>
           <option value="2">Weekends</option>
+          <option value="3">Single event</option>
         </select>
       </label>
       <label class="alarm-select-field">Sound:
@@ -575,6 +626,14 @@ function renderAlarms() {
           <option value="5">Motorola ring</option>
           <option value="6">Siemens tone</option>
         </select>
+      </label>
+      <label class="alarm-select-field">Snooze button:
+        <select id="alarm-button-action">
+          ${(state.status.snoozeButtonActions || []).map((action) => `<option value="${action.index}">${action.name}</option>`).join('')}
+        </select>
+      </label>
+      <label id="alarm-snooze-minutes-row" class="alarm-time-field">Snooze minutes:
+        <input id="alarm-snooze-minutes" type="number" min="1" max="60">
       </label>
     </div>
     <div class="button-row">
@@ -590,6 +649,9 @@ function renderAlarms() {
   byId('alarm-minute').value = alarm.minute;
   byId('alarm-sound').value = String(alarm.sound);
   byId('alarm-schedule').value = String(alarm.schedule);
+  byId('alarm-button-action').value = String(alarm.buttonAction);
+  byId('alarm-snooze-minutes').value = String(alarm.snoozeMinutes);
+  updateAlarmSnoozeVisibility();
 
   byId('alarm-enabled').addEventListener('change', (event) => {
     updateAlarmField(state.activeAlarmIndex, 'enabled', event.target.checked);
@@ -607,7 +669,14 @@ function renderAlarms() {
     updateAlarmField(state.activeAlarmIndex, 'sound', clampNumber(event.target.value, 0, 6));
   });
   byId('alarm-schedule').addEventListener('change', (event) => {
-    updateAlarmField(state.activeAlarmIndex, 'schedule', clampNumber(event.target.value, 0, 2));
+    updateAlarmField(state.activeAlarmIndex, 'schedule', clampNumber(event.target.value, 0, 3));
+  });
+  byId('alarm-button-action').addEventListener('change', (event) => {
+    updateAlarmField(state.activeAlarmIndex, 'buttonAction', clampNumber(event.target.value, 0, 1));
+    updateAlarmSnoozeVisibility();
+  });
+  byId('alarm-snooze-minutes').addEventListener('input', (event) => {
+    updateAlarmField(state.activeAlarmIndex, 'snoozeMinutes', clampNumber(event.target.value, 1, 60));
   });
   byId('test-alarm').addEventListener('click', () => {
     testAlarmSound(state.activeAlarmIndex);
@@ -667,6 +736,7 @@ async function submitTimezone() {
   try {
     const data = await postForm('/api/timezone', {
       timezone: clampNumber(byId('timezone-select').value, 0, 99),
+      font: state.status.fontIndex || 0,
       dstmode: selectedDstMode(),
       manualdst: clampNumber(byId('manual-dst-select').value, 0, 7200)
     });
@@ -674,6 +744,18 @@ async function submitTimezone() {
     await loadStatus();
   } catch (error) {
     setMessage(error.message || 'Failed to update timezone');
+  }
+}
+
+async function submitSettings() {
+  try {
+    const data = await postForm('/api/settings', {
+      font: selectedFontIndex()
+    });
+    setMessage(data.message || 'Settings updated');
+    await loadStatus();
+  } catch (error) {
+    setMessage(error.message || 'Failed to update settings');
   }
 }
 
@@ -699,7 +781,7 @@ async function submitAlarms() {
     const encoded = state.alarms.map((alarm) => {
       const enabled = alarm.enabled ? '1' : '0';
       const title = encodeURIComponent((alarm.title || '').trim());
-      return `${enabled},${alarm.hour},${alarm.minute},${alarm.sound},${alarm.schedule},${title}`;
+      return `${enabled},${alarm.hour},${alarm.minute},${alarm.sound},${alarm.schedule},${alarm.buttonAction},${alarm.snoozeMinutes},${title}`;
     }).join('|');
     const data = await postForm('/api/alarms', { alarms: encoded });
     state.alarmsEdited = false;
@@ -734,7 +816,9 @@ function addAlarm() {
     hour: 0,
     minute: 0,
     sound: 0,
-    schedule: 0
+    schedule: 0,
+    buttonAction: 0,
+    snoozeMinutes: 10
   });
   state.activeAlarmIndex = state.alarms.length - 1;
   renderAlarms();
@@ -746,6 +830,7 @@ function init() {
   });
   byId('submit-time').addEventListener('click', submitTime);
   byId('submit-timezone').addEventListener('click', submitTimezone);
+  byId('submit-settings').addEventListener('click', submitSettings);
   byId('save-wifi').addEventListener('click', submitWifi);
   byId('save-alarms').addEventListener('click', submitAlarms);
   byId('add-alarm').addEventListener('click', addAlarm);

@@ -79,6 +79,34 @@ int getEffectiveGmtOffset() {
   }
 }
 
+static bool isValidFontValue(uint8_t value) {
+  return value <= static_cast<uint8_t>(Digits5x8::FontStyle::HD44780);
+}
+
+static bool isValidSnoozeButtonAction(uint8_t value) {
+  return value < static_cast<uint8_t>(SNOOZE_BUTTON_ACTION_COUNT);
+}
+
+void loadDigitFont() {
+  const uint8_t defaultFont = static_cast<uint8_t>(Digits5x8::FontStyle::HD44780);
+  prefs.begin("display", true);
+  uint8_t savedFont = prefs.getUChar("font", defaultFont);
+  prefs.end();
+
+  if (!isValidFontValue(savedFont)) {
+    savedFont = defaultFont;
+  }
+
+  Digits5x8::setFont(static_cast<Digits5x8::FontStyle>(savedFont));
+}
+
+void saveDigitFont(Digits5x8::FontStyle font) {
+  prefs.begin("display", false);
+  prefs.putUChar("font", static_cast<uint8_t>(font));
+  prefs.end();
+  Digits5x8::setFont(font);
+}
+
 /**
  * @brief Loads WiFi credentials from the `wifi` NVS namespace.
  *
@@ -231,10 +259,10 @@ static String decodeAlarmTitle(const String &encoded) {
  * @details
  * The stored value is a single compact string that contains up to
  * `MAX_ALARMS` pipe-separated records. The current format is:
- * `enabled,hour,minute,sound,schedule,title`
+ * `enabled,hour,minute,sound,schedule,buttonAction,snoozeMinutes,title`
  *
  * Example:
- * `1,7,30,2,1,Weekday%20Wakeup|0,9,0,1,2,Weekend`
+ * `1,7,30,2,1,0,10,Weekday%20Wakeup|0,9,0,1,2,1,5,Weekend`
  *
  * Malformed or out-of-range records are skipped instead of partially loaded.
  *
@@ -264,6 +292,8 @@ void loadAlarms() {
     int p2 = (p1 >= 0) ? chunk.indexOf(',', p1 + 1) : -1;
     int p3 = (p2 >= 0) ? chunk.indexOf(',', p2 + 1) : -1;
     int p4 = (p3 >= 0) ? chunk.indexOf(',', p3 + 1) : -1;
+    int p5 = (p4 >= 0) ? chunk.indexOf(',', p4 + 1) : -1;
+    int p6 = (p5 >= 0) ? chunk.indexOf(',', p5 + 1) : -1;
 
     if (p0 >= 0 && p1 >= 0 && p2 >= 0 && p3 >= 0 && p4 >= 0) {
       bool enabled = chunk.substring(0, p0) == "1";
@@ -271,16 +301,32 @@ void loadAlarms() {
       uint8_t minute = chunk.substring(p1 + 1, p2).toInt();
       uint8_t sound = chunk.substring(p2 + 1, p3).toInt();
       uint8_t schedule = chunk.substring(p3 + 1, p4).toInt();
-      String title = decodeAlarmTitle(chunk.substring(p4 + 1));
+      uint8_t buttonAction = SNOOZE_BUTTON_ACTION_SNOOZE;
+      uint8_t snoozeMinutes = 10;
+      String title;
 
-      if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT && schedule < ALARM_SCHEDULE_COUNT) {
+      if (p5 >= 0 && p6 >= 0) {
+        buttonAction = chunk.substring(p4 + 1, p5).toInt();
+        snoozeMinutes = chunk.substring(p5 + 1, p6).toInt();
+        title = decodeAlarmTitle(chunk.substring(p6 + 1));
+      } else {
+        title = decodeAlarmTitle(chunk.substring(p4 + 1));
+      }
+
+      if (hour < 24 &&
+          minute < 60 &&
+          sound < ALARM_SOUND_COUNT &&
+          schedule < ALARM_SCHEDULE_COUNT &&
+          isValidSnoozeButtonAction(buttonAction) &&
+          snoozeMinutes >= 1 &&
+          snoozeMinutes <= 60) {
         if (title.length() == 0) {
           title = defaultAlarmTitle(alarmCount);
         }
         // Only fully validated records are admitted into the runtime array.
         // This keeps the scheduler logic simple and protects against corrupt
         // NVS data or partially edited payloads.
-        alarms[alarmCount++] = {enabled, hour, minute, sound, schedule, title};
+        alarms[alarmCount++] = {enabled, hour, minute, sound, schedule, buttonAction, snoozeMinutes, title};
       }
     }
 
@@ -316,6 +362,10 @@ void saveAlarms() {
     encoded += ',';
     encoded += String(alarms[i].schedule);
     encoded += ',';
+    encoded += String(alarms[i].buttonAction);
+    encoded += ',';
+    encoded += String(alarms[i].snoozeMinutes);
+    encoded += ',';
     encoded += encodeAlarmTitle(alarms[i].title);
   }
 
@@ -330,6 +380,7 @@ bool wifiModeAP = false;  // true if running as Access Point, false if connected
 // Pin definitions
 #define BUZZER_PIN 20
 #define DP_LED_PIN 10
+#define SNOOZE_BUTTON_PIN 0
 
 // Buzzer timer configuration
 #define BUZZER_CHANNEL 0
@@ -385,9 +436,16 @@ const uint8_t ANIM_DELAY_STEPS = 2; // How many animation frames between each di
 // Alarm state tracking
 bool alarmTriggered[MAX_ALARMS] = {false};
 int lastAlarmMinute = -1;
+bool alarmActive = false;
+int activeAlarmIndex = -1;
+uint8_t activeAlarmSound = ALARM_SOUND_SIREN;
+int snoozedAlarmIndex = -1;
+uint32_t snoozeUntilMillis = 0;
+bool alarmPlaybackInterruptible = false;
 
 // RTOS mutex for protecting shared digit data
 SemaphoreHandle_t digitMutex;
+SemaphoreHandle_t alarmStateMutex;
 
 // Task handles
 TaskHandle_t webServerTaskHandle;
@@ -395,6 +453,10 @@ TaskHandle_t timeAlarmTaskHandle;
 TaskHandle_t animationTaskHandle;
 TaskHandle_t displayTaskHandle;
 TaskHandle_t heartbeatTaskHandle;
+TaskHandle_t alarmPlaybackTaskHandle;
+TaskHandle_t snoozeButtonTaskHandle;
+
+void buzzerOff();
 
 bool isAlarmScheduledForToday(uint8_t schedule, uint8_t dayOfWeek) {
   bool isWeekend = (dayOfWeek == 0 || dayOfWeek == 6);
@@ -404,10 +466,62 @@ bool isAlarmScheduledForToday(uint8_t schedule, uint8_t dayOfWeek) {
       return !isWeekend;
     case ALARM_SCHEDULE_WEEKENDS:
       return isWeekend;
+    case ALARM_SCHEDULE_SINGLE:
     case ALARM_SCHEDULE_DAILY:
     default:
       return true;
   }
+}
+
+static bool hasSnoozeExpired(uint32_t deadline) {
+  return deadline != 0 && static_cast<int32_t>(millis() - deadline) >= 0;
+}
+
+static void startAlarmPlayback(int alarmIndex, uint8_t sound) {
+  xSemaphoreTake(alarmStateMutex, portMAX_DELAY);
+  alarmActive = true;
+  activeAlarmIndex = alarmIndex;
+  activeAlarmSound = sound;
+  if (snoozedAlarmIndex == alarmIndex) {
+    snoozedAlarmIndex = -1;
+    snoozeUntilMillis = 0;
+  }
+  xSemaphoreGive(alarmStateMutex);
+}
+
+static void dismissActiveAlarm() {
+  xSemaphoreTake(alarmStateMutex, portMAX_DELAY);
+  alarmActive = false;
+  activeAlarmIndex = -1;
+  activeAlarmSound = ALARM_SOUND_SIREN;
+  xSemaphoreGive(alarmStateMutex);
+  buzzerOff();
+}
+
+static void snoozeActiveAlarm() {
+  xSemaphoreTake(alarmStateMutex, portMAX_DELAY);
+  if (alarmActive && activeAlarmIndex >= 0) {
+    snoozedAlarmIndex = activeAlarmIndex;
+    snoozeUntilMillis = millis() + (static_cast<uint32_t>(alarms[activeAlarmIndex].snoozeMinutes) * 60000UL);
+  }
+  alarmActive = false;
+  activeAlarmIndex = -1;
+  activeAlarmSound = ALARM_SOUND_SIREN;
+  xSemaphoreGive(alarmStateMutex);
+  buzzerOff();
+}
+
+bool shouldAbortAlarmPlayback() {
+  if (!alarmPlaybackInterruptible || alarmStateMutex == nullptr) {
+    return false;
+  }
+
+  bool shouldAbort = false;
+  if (xSemaphoreTake(alarmStateMutex, portMAX_DELAY) == pdTRUE) {
+    shouldAbort = !alarmActive;
+    xSemaphoreGive(alarmStateMutex);
+  }
+  return shouldAbort;
 }
 
 // Helper: return the row bytes for a digit position, applying slide-up animation when active
@@ -443,13 +557,32 @@ void buzzerOff() {
 }
 
 void playNote(unsigned int frequency, unsigned long duration) {
+  const unsigned long sliceMs = 20;
+
   if (frequency == 0) {
     buzzerOff();
-    delay(duration);
+    unsigned long remaining = duration;
+    while (remaining > 0) {
+      if (shouldAbortAlarmPlayback()) {
+        return;
+      }
+      unsigned long step = remaining > sliceMs ? sliceMs : remaining;
+      delay(step);
+      remaining -= step;
+    }
   } else {
     ledcWriteTone(BUZZER_CHANNEL, frequency);
     ledcWrite(BUZZER_CHANNEL, BUZZER_DUTY_CYCLE);
-    delay(duration);
+    unsigned long remaining = duration;
+    while (remaining > 0) {
+      if (shouldAbortAlarmPlayback()) {
+        buzzerOff();
+        return;
+      }
+      unsigned long step = remaining > sliceMs ? sliceMs : remaining;
+      delay(step);
+      remaining -= step;
+    }
     buzzerOff();
   }
 }
@@ -458,12 +591,20 @@ void playSiren() {
   // Short siren sound for WiFi fallback activation
   // Rising siren: 800Hz to 1200Hz
   for (int freq = 800; freq <= 1200; freq += 50) {
+    if (shouldAbortAlarmPlayback()) {
+      buzzerOff();
+      return;
+    }
     ledcWriteTone(BUZZER_CHANNEL, freq);
     ledcWrite(BUZZER_CHANNEL, BUZZER_DUTY_CYCLE);
     delay(30);
   }
   // Falling siren: 1200Hz to 800Hz
   for (int freq = 1200; freq >= 800; freq -= 50) {
+    if (shouldAbortAlarmPlayback()) {
+      buzzerOff();
+      return;
+    }
     ledcWriteTone(BUZZER_CHANNEL, freq);
     ledcWrite(BUZZER_CHANNEL, BUZZER_DUTY_CYCLE);
     delay(30);
@@ -570,6 +711,7 @@ void setupWebServer() {
   server.on("/api/settime", HTTP_POST, handleApiSetTime);
   server.on("/api/wifi", HTTP_POST, handleApiWifi);
   server.on("/api/timezone", HTTP_POST, handleApiTimezone);
+  server.on("/api/settings", HTTP_POST, handleApiSettings);
   server.on("/api/alarms", HTTP_POST, handleApiAlarms);
   server.on("/api/alarm/test", HTTP_POST, handleApiAlarmTest);
   server.onNotFound(handleNotFound);
@@ -585,6 +727,7 @@ void webServerTask(void *pvParameters) {
 }
 
 void timeAlarmTask(void *pvParameters) {
+  bool NTPSynced = 0;
   while (true) {
     DateTime now = rtc.now();
 
@@ -620,6 +763,29 @@ void timeAlarmTask(void *pvParameters) {
       }
     }
 
+    int dueSnoozedAlarmIndex = -1;
+    bool currentlyActive = false;
+    if (xSemaphoreTake(alarmStateMutex, portMAX_DELAY) == pdTRUE) {
+      currentlyActive = alarmActive;
+      if (!alarmActive && snoozedAlarmIndex >= 0 && hasSnoozeExpired(snoozeUntilMillis)) {
+        dueSnoozedAlarmIndex = snoozedAlarmIndex;
+        snoozedAlarmIndex = -1;
+        snoozeUntilMillis = 0;
+      }
+      xSemaphoreGive(alarmStateMutex);
+    }
+
+    if (dueSnoozedAlarmIndex >= 0) {
+      startAlarmPlayback(dueSnoozedAlarmIndex, alarms[dueSnoozedAlarmIndex].sound);
+      vTaskDelay(1000 / portTICK_PERIOD_MS);
+      continue;
+    }
+
+    if (currentlyActive) {
+      vTaskDelay(1000 / portTICK_PERIOD_MS);
+      continue;
+    }
+
     for (int i = 0; i < alarmCount; i++) {
       if (!alarmTriggered[i] &&
           alarms[i].enabled &&
@@ -627,11 +793,107 @@ void timeAlarmTask(void *pvParameters) {
           now.hour == alarms[i].hour &&
           now.minute == alarms[i].minute) {
         alarmTriggered[i] = true;
-        playAlarmSound(alarms[i].sound);
+        if (alarms[i].schedule == ALARM_SCHEDULE_SINGLE) {
+          alarms[i].enabled = false;
+          saveAlarms();
+        }
+        startAlarmPlayback(i, alarms[i].sound);
+        break;
       }
     }
 
+    // Synchronize RTC from network every midnight
+    if ((now.hour == 0) && !NTPSynced) {
+      if (!wifiModeAP) {
+        Serial.println("Syncing time with NTP...");
+        if (rtc.syncNTP("pool.ntp.org", getEffectiveGmtOffset(), 0)) {
+          Serial.println("NTP sync successful!");
+        } else {
+          Serial.println("NTP sync failed, using current RTC time");
+        }
+      }
+      NTPSynced = true; // Doesn't matter if we're succesful in syncing time.
+    }
+    // Reset NTP sync flag at let's say ... 08:00
+    if ((now.hour == 8) && NTPSynced) {
+      NTPSynced = false;
+    }
+
     vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+}
+
+void alarmPlaybackTask(void *pvParameters) {
+  while (true) {
+    bool shouldPlay = false;
+    uint8_t sound = ALARM_SOUND_SIREN;
+
+    if (xSemaphoreTake(alarmStateMutex, portMAX_DELAY) == pdTRUE) {
+      shouldPlay = alarmActive;
+      sound = activeAlarmSound;
+      xSemaphoreGive(alarmStateMutex);
+    }
+
+    if (!shouldPlay) {
+      buzzerOff();
+      vTaskDelay(50 / portTICK_PERIOD_MS);
+      continue;
+    }
+
+    alarmPlaybackInterruptible = true;
+    playAlarmSound(sound);
+    alarmPlaybackInterruptible = false;
+
+    if (shouldAbortAlarmPlayback()) {
+      buzzerOff();
+    }
+
+    vTaskDelay(250 / portTICK_PERIOD_MS);
+  }
+}
+
+void snoozeButtonTask(void *pvParameters) {
+  const TickType_t pollDelay = 10 / portTICK_PERIOD_MS;
+  const uint32_t debounceMs = 30;
+  bool lastPhysicalState = digitalRead(SNOOZE_BUTTON_PIN) == LOW;
+  bool debouncedPressed = lastPhysicalState;
+  uint32_t lastChangeMs = millis();
+
+  while (true) {
+    bool physicalPressed = digitalRead(SNOOZE_BUTTON_PIN) == LOW;
+    uint32_t nowMs = millis();
+
+    if (physicalPressed != lastPhysicalState) {
+      lastPhysicalState = physicalPressed;
+      lastChangeMs = nowMs;
+    }
+
+    if (physicalPressed != debouncedPressed &&
+        static_cast<uint32_t>(nowMs - lastChangeMs) >= debounceMs) {
+      debouncedPressed = physicalPressed;
+
+      if (debouncedPressed) {
+        bool active = false;
+        uint8_t action = SNOOZE_BUTTON_ACTION_SNOOZE;
+        if (xSemaphoreTake(alarmStateMutex, portMAX_DELAY) == pdTRUE) {
+          active = alarmActive;
+          if (alarmActive && activeAlarmIndex >= 0) {
+            action = alarms[activeAlarmIndex].buttonAction;
+          }
+          xSemaphoreGive(alarmStateMutex);
+        }
+
+        if (active) {
+          if (action == SNOOZE_BUTTON_ACTION_SNOOZE) {
+            snoozeActiveAlarm();
+          } else {
+            dismissActiveAlarm();
+          }
+        }
+      }
+    }
+
+    vTaskDelay(pollDelay);
   }
 }
 
@@ -697,12 +959,13 @@ void setup() {
   // Initialize serial for debugging
   Serial.begin(115200);
   delay(1000);
-  
+
   // Setup GPIO
   pinMode(BUZZER_PIN, OUTPUT_OPEN_DRAIN);
   digitalWrite(BUZZER_PIN, HIGH);  // Buzzer off (active LOW)
   pinMode(DP_LED_PIN, OUTPUT_OPEN_DRAIN);
   digitalWrite(DP_LED_PIN, HIGH);  // DP LED off
+  pinMode(SNOOZE_BUTTON_PIN, INPUT_PULLUP);
 
   // Setup buzzer timer
   ledcSetup(BUZZER_CHANNEL, BUZZER_FREQUENCY, BUZZER_RESOLUTION);
@@ -713,6 +976,9 @@ void setup() {
   
   // Load saved WiFi credentials (if any)
   loadWifiCredentials();
+
+  // Load saved display settings (if any)
+  loadDigitFont();
 
   // Load saved alarm settings (if any)
   loadAlarms();
@@ -797,13 +1063,16 @@ void setup() {
 
   // Initialize RTOS mutex
   digitMutex = xSemaphoreCreateMutex();
+  alarmStateMutex = xSemaphoreCreateMutex();
 
   // Create RTOS tasks
   xTaskCreate(webServerTask, "WebServer", 4096, NULL, 4, &webServerTaskHandle);
   xTaskCreate(timeAlarmTask, "TimeAlarm", 2048, NULL, 2, &timeAlarmTaskHandle);
+  xTaskCreate(alarmPlaybackTask, "AlarmPlayback", 2048, NULL, 2, &alarmPlaybackTaskHandle);
   xTaskCreate(animationTask, "Animation", 1024, NULL, 2, &animationTaskHandle);
   xTaskCreate(displayTask, "Display", 1024, NULL, 3, &displayTaskHandle);
   xTaskCreate(heartbeatTask, "Heartbeat", 512, NULL, 1, &heartbeatTaskHandle);
+  xTaskCreate(snoozeButtonTask, "SnoozeButton", 1024, NULL, 2, &snoozeButtonTaskHandle);
 
   Serial.println("RTOS tasks created");
 }

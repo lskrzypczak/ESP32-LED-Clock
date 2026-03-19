@@ -11,25 +11,47 @@
 
 class Digits5x8 {
 public:
+    enum class FontStyle : uint8_t {
+        Classic,
+        HD44780
+    };
+
     /**
      * @brief Get bitmap data for a digit
      * @param digit Digit 0-9
      * @return Pointer to 5-byte array containing bitmap data
      */
     static const uint8_t* getDigit(uint8_t digit);
+    static const uint8_t* getDigit(uint8_t digit, FontStyle font);
+    static void setFont(FontStyle font);
+    static FontStyle getFont();
 
 private:
-    // Digit bitmaps - 5x8 pixels each
-    static const uint8_t digit0[DIGIT_HEIGHT];
-    static const uint8_t digit1[DIGIT_HEIGHT];
-    static const uint8_t digit2[DIGIT_HEIGHT];
-    static const uint8_t digit3[DIGIT_HEIGHT];
-    static const uint8_t digit4[DIGIT_HEIGHT];
-    static const uint8_t digit5[DIGIT_HEIGHT];
-    static const uint8_t digit6[DIGIT_HEIGHT];
-    static const uint8_t digit7[DIGIT_HEIGHT];
-    static const uint8_t digit8[DIGIT_HEIGHT];
-    static const uint8_t digit9[DIGIT_HEIGHT];
+    // Classic custom digit bitmaps - 5x8 pixels each
+    static const uint8_t classicDigit0[DIGIT_HEIGHT];
+    static const uint8_t classicDigit1[DIGIT_HEIGHT];
+    static const uint8_t classicDigit2[DIGIT_HEIGHT];
+    static const uint8_t classicDigit3[DIGIT_HEIGHT];
+    static const uint8_t classicDigit4[DIGIT_HEIGHT];
+    static const uint8_t classicDigit5[DIGIT_HEIGHT];
+    static const uint8_t classicDigit6[DIGIT_HEIGHT];
+    static const uint8_t classicDigit7[DIGIT_HEIGHT];
+    static const uint8_t classicDigit8[DIGIT_HEIGHT];
+    static const uint8_t classicDigit9[DIGIT_HEIGHT];
+
+    // HD44780-compatible digit bitmaps imported from a standard 5x7 LCD font.
+    static const uint8_t hd44780Digit0[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit1[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit2[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit3[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit4[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit5[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit6[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit7[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit8[DIGIT_HEIGHT];
+    static const uint8_t hd44780Digit9[DIGIT_HEIGHT];
+
+    static FontStyle currentFont;
 };
 
 #endif // DIGITS5X8_H

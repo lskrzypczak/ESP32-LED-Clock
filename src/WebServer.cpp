@@ -13,6 +13,42 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+struct DigitFontOption {
+  Digits5x8::FontStyle value;
+  const char* id;
+  const char* name;
+};
+
+static const DigitFontOption DIGIT_FONT_OPTIONS[] = {
+  {Digits5x8::FontStyle::Classic, "classic", "Classic"},
+  {Digits5x8::FontStyle::HD44780, "hd44780", "HD44780"}
+};
+
+static const size_t DIGIT_FONT_COUNT = sizeof(DIGIT_FONT_OPTIONS) / sizeof(DIGIT_FONT_OPTIONS[0]);
+
+struct SnoozeActionOption {
+  SnoozeButtonAction value;
+  const char* id;
+  const char* name;
+};
+
+static const SnoozeActionOption SNOOZE_ACTION_OPTIONS[] = {
+  {SNOOZE_BUTTON_ACTION_SNOOZE, "snooze", "Snooze alarm"},
+  {SNOOZE_BUTTON_ACTION_DISMISS, "dismiss", "Stop alarm"}
+};
+
+static const size_t SNOOZE_ACTION_COUNT = sizeof(SNOOZE_ACTION_OPTIONS) / sizeof(SNOOZE_ACTION_OPTIONS[0]);
+
+static const DigitFontOption& currentDigitFontOption() {
+  Digits5x8::FontStyle current = Digits5x8::getFont();
+  for (size_t i = 0; i < DIGIT_FONT_COUNT; i++) {
+    if (DIGIT_FONT_OPTIONS[i].value == current) {
+      return DIGIT_FONT_OPTIONS[i];
+    }
+  }
+  return DIGIT_FONT_OPTIONS[0];
+}
+
 /**
  * @brief Sends a JSON response with the given HTTP status.
  * @param code HTTP status code.
@@ -143,6 +179,26 @@ void handleApiStatus() {
   }
   tzList += "]";
 
+  String fontList = "[";
+  for (size_t i = 0; i < DIGIT_FONT_COUNT; i++) {
+    fontList += "{\"index\":" + String(static_cast<uint8_t>(DIGIT_FONT_OPTIONS[i].value));
+    fontList += ",\"id\":\"" + jsonEscape(String(DIGIT_FONT_OPTIONS[i].id)) + "\"";
+    fontList += ",\"name\":\"" + jsonEscape(String(DIGIT_FONT_OPTIONS[i].name)) + "\"}";
+    if (i + 1 < DIGIT_FONT_COUNT) fontList += ",";
+  }
+  fontList += "]";
+
+  const DigitFontOption &currentFont = currentDigitFontOption();
+
+  String snoozeActionList = "[";
+  for (size_t i = 0; i < SNOOZE_ACTION_COUNT; i++) {
+    snoozeActionList += "{\"index\":" + String(static_cast<uint8_t>(SNOOZE_ACTION_OPTIONS[i].value));
+    snoozeActionList += ",\"id\":\"" + jsonEscape(String(SNOOZE_ACTION_OPTIONS[i].id)) + "\"";
+    snoozeActionList += ",\"name\":\"" + jsonEscape(String(SNOOZE_ACTION_OPTIONS[i].name)) + "\"}";
+    if (i + 1 < SNOOZE_ACTION_COUNT) snoozeActionList += ",";
+  }
+  snoozeActionList += "]";
+
   String json = "{";
   json += "\"success\":true,";
   json += "\"time\":\"" + jsonEscape(String(timeStr)) + "\",";
@@ -153,6 +209,12 @@ void handleApiStatus() {
   json += "\"timezone\":{";
   json += "\"name\":\"" + jsonEscape(timezones[currentTimezoneIndex].name) + "\",";
   json += "\"description\":\"" + jsonEscape(timezones[currentTimezoneIndex].description) + "\"}";
+  json += ",\"fontIndex\":" + String(static_cast<uint8_t>(currentFont.value));
+  json += ",\"font\":{";
+  json += "\"id\":\"" + jsonEscape(String(currentFont.id)) + "\",";
+  json += "\"name\":\"" + jsonEscape(String(currentFont.name)) + "\"}";
+  json += ",\"fonts\":" + fontList;
+  json += ",\"snoozeButtonActions\":" + snoozeActionList;
   json += ",\"dstMode\":\"" + String(dstMode == DST_AUTO ? "auto" : "manual") + "\"";
   json += ",\"manualDstOffset\":" + String(manualDstOffset);
   json += ",\"timezones\":" + tzList;
@@ -167,6 +229,8 @@ void handleApiStatus() {
     json += ",\"minute\":" + String(alarms[i].minute);
     json += ",\"sound\":" + String(alarms[i].sound);
     json += ",\"schedule\":" + String(alarms[i].schedule);
+    json += ",\"buttonAction\":" + String(alarms[i].buttonAction);
+    json += ",\"snoozeMinutes\":" + String(alarms[i].snoozeMinutes);
     json += ",\"title\":\"" + jsonEscape(alarms[i].title) + "\"";
     json += "}";
     if (i < alarmCount - 1) json += ",";
@@ -227,10 +291,10 @@ void handleApiWifi() {
  *
  * @details
  * The browser submits alarms in one compact form field:
- * `enabled,hour,minute,sound,schedule,title|...`
+ * `enabled,hour,minute,sound,schedule,buttonAction,snoozeMinutes,title|...`
  *
  * Titles are percent-encoded so commas and pipes remain reserved as field and
- * record delimiters. The parser requires the full six-field record layout and
+ * record delimiters. The parser requires the full eight-field record layout and
  * skips invalid records rather than accepting partially corrupt data.
  */
 void handleApiAlarms() {
@@ -260,20 +324,30 @@ void handleApiAlarms() {
     int p2 = (p1 >= 0) ? chunk.indexOf(',', p1 + 1) : -1;
     int p3 = (p2 >= 0) ? chunk.indexOf(',', p2 + 1) : -1;
     int p4 = (p3 >= 0) ? chunk.indexOf(',', p3 + 1) : -1;
+    int p5 = (p4 >= 0) ? chunk.indexOf(',', p4 + 1) : -1;
+    int p6 = (p5 >= 0) ? chunk.indexOf(',', p5 + 1) : -1;
 
-    if (p0 >= 0 && p1 >= 0 && p2 >= 0 && p3 >= 0) {
+    if (p0 >= 0 && p1 >= 0 && p2 >= 0 && p3 >= 0 && p4 >= 0 && p5 >= 0 && p6 >= 0) {
       bool enabled = chunk.substring(0, p0) == "1";
       uint8_t hour = chunk.substring(p0 + 1, p1).toInt();
       uint8_t minute = chunk.substring(p1 + 1, p2).toInt();
       uint8_t sound = chunk.substring(p2 + 1, p3).toInt();
-      uint8_t schedule = (p4 >= 0) ? chunk.substring(p3 + 1, p4).toInt() : chunk.substring(p3 + 1).toInt();
-      String title = decodeAlarmTitle(chunk.substring(p4 + 1));
+      uint8_t schedule = chunk.substring(p3 + 1, p4).toInt();
+      uint8_t buttonAction = chunk.substring(p4 + 1, p5).toInt();
+      uint8_t snoozeMinutes = chunk.substring(p5 + 1, p6).toInt();
+      String title = decodeAlarmTitle(chunk.substring(p6 + 1));
 
-      if (hour < 24 && minute < 60 && sound < ALARM_SOUND_COUNT && schedule < ALARM_SCHEDULE_COUNT) {
+      if (hour < 24 &&
+          minute < 60 &&
+          sound < ALARM_SOUND_COUNT &&
+          schedule < ALARM_SCHEDULE_COUNT &&
+          buttonAction < SNOOZE_BUTTON_ACTION_COUNT &&
+          snoozeMinutes >= 1 &&
+          snoozeMinutes <= 60) {
         if (title.length() == 0) {
           title = "Alarm " + String(newCount + 1);
         }
-        alarms[newCount++] = {enabled, hour, minute, sound, schedule, title};
+        alarms[newCount++] = {enabled, hour, minute, sound, schedule, buttonAction, snoozeMinutes, title};
       }
     }
 
@@ -340,6 +414,23 @@ void handleApiTimezone() {
   } else {
     sendJson(400, "{\"success\":false,\"message\":\"Missing parameters\"}");
   }
+}
+
+void handleApiSettings() {
+  if (!server.hasArg("font")) {
+    sendJson(400, "{\"success\":false,\"message\":\"Missing parameters\"}");
+    return;
+  }
+
+  int fontIndex = server.arg("font").toInt();
+
+  if (fontIndex < 0 || fontIndex >= static_cast<int>(DIGIT_FONT_COUNT)) {
+    sendJson(400, "{\"success\":false,\"message\":\"Invalid settings\"}");
+    return;
+  }
+
+  saveDigitFont(static_cast<Digits5x8::FontStyle>(fontIndex));
+  sendJson(200, "{\"success\":true,\"message\":\"Settings updated\"}");
 }
 
 void handleNotFound() {
